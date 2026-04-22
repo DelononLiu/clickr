@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Clickr - 桌面AI助手</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #fff;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .header {
+      padding: 12px 16px;
+      background: #16213e;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      -webkit-app-region: drag;
+    }
+    
+    .header h1 { font-size: 16px; font-weight: 600; color: #00d9ff; }
+    
+    .header button {
+      -webkit-app-region: no-drag;
+      background: none;
+      border: none;
+      color: #888;
+      cursor: pointer;
+      font-size: 18px;
+    }
+    
+    .shortcuts {
+      padding: 8px 16px;
+      background: #0f0f23;
+      font-size: 11px;
+      color: #666;
+      display: flex;
+      gap: 12px;
+    }
+    
+    .shortcuts kbd {
+      background: #2a2a4a;
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: #00d9ff;
+    }
+    
+    .content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+    }
+    
+    .input-section { margin-bottom: 12px; }
+    
+    .input-section label {
+      display: block;
+      font-size: 12px;
+      color: #888;
+      margin-bottom: 6px;
+    }
+    
+    textarea {
+      width: 100%;
+      height: 100px;
+      background: #0f0f23;
+      border: 1px solid #2a2a4a;
+      border-radius: 8px;
+      color: #fff;
+      padding: 10px;
+      font-size: 14px;
+      resize: none;
+    }
+    
+    textarea:focus { outline: none; border-color: #00d9ff; }
+    
+    .actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+    
+    .action-btn {
+      padding: 10px 16px;
+      background: #2a2a4a;
+      border: none;
+      border-radius: 6px;
+      color: #fff;
+      cursor: pointer;
+      font-size: 13px;
+      transition: background 0.2s;
+    }
+    
+    .action-btn:hover { background: #3a3a5a; }
+    
+    .action-btn.primary { background: #00d9ff; color: #1a1a2e; }
+    .action-btn.primary:hover { background: #00b8d9; }
+    
+    .action-btn.translate { background: #4ade80; color: #1a1a2e; }
+    .action-btn.translate:hover { background: #22c55e; }
+    
+    .action-btn.generate { background: #a78bfa; color: #1a1a2e; }
+    .action-btn.generate:hover { background: #8b5cf6; }
+    
+    .output-section { margin-top: 12px; }
+    
+    .output-section label {
+      display: block;
+      font-size: 12px;
+      color: #888;
+      margin-bottom: 6px;
+    }
+    
+    .output {
+      background: #0f0f23;
+      border: 1px solid #2a2a4a;
+      border-radius: 8px;
+      padding: 12px;
+      min-height: 120px;
+      font-size: 14px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    
+    .loading { color: #888; font-style: italic; }
+    .error { color: #ff6b6b; }
+    
+    .settings, .main-view { display: none; }
+    .settings.active, .main-view.active { display: block; }
+    
+    .input-group { margin-bottom: 12px; }
+    
+    .input-group label {
+      display: block;
+      font-size: 12px;
+      color: #888;
+      margin-bottom: 6px;
+    }
+    
+    .input-group input {
+      width: 100%;
+      padding: 10px;
+      background: #0f0f23;
+      border: 1px solid #2a2a4a;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 14px;
+    }
+    
+    .input-group input:focus { outline: none; border-color: #00d9ff; }
+    
+    .hint {
+      font-size: 11px;
+      color: #666;
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Clickr</h1>
+    <button onclick="toggleSettings()">⚙</button>
+  </div>
+  
+  <div class="shortcuts">
+    <span><kbd>Ctrl+Shift+Space</kbd> 问答</span>
+    <span><kbd>Ctrl+Shift+T</kbd> 翻译</span>
+    <span><kbd>Ctrl+Shift+G</kbd> 生成</span>
+  </div>
+  
+  <div class="content">
+    <div class="main-view active" id="mainView">
+      <div class="input-section">
+        <label>输入内容:</label>
+        <textarea id="inputText" placeholder="选中文本或直接输入..."></textarea>
+      </div>
+      
+      <div class="actions">
+        <button class="action-btn translate" onclick="translateText()">🌐 翻译</button>
+        <button class="action-btn generate" onclick="generateText()">✨ 生成</button>
+        <button class="action-btn" onclick="summarizeText()">📝 总结</button>
+        <button class="action-btn" onclick="explainText()">💡 解释</button>
+      </div>
+      
+      <div class="output-section">
+        <label>AI 回复:</label>
+        <div class="output" id="output"></div>
+      </div>
+      
+      <div class="hint">提示：结果会自动复制到剪贴板</div>
+    </div>
+    
+    <div class="settings" id="settings">
+      <div class="input-group">
+        <label>OpenAI API Key:</label>
+        <input type="password" id="apiKey" placeholder="sk-...">
+      </div>
+      
+      <div class="input-group">
+        <label>API Endpoint:</label>
+        <input type="text" id="apiEndpoint" placeholder="https://api.openai.com/v1">
+      </div>
+      
+      <div class="input-group">
+        <label>Model:</label>
+        <input type="text" id="apiModel" placeholder="gpt-3.5-turbo">
+      </div>
+      
+      <div class="actions">
+        <button class="action-btn primary" onclick="saveSettings()">保存设置</button>
+        <button class="action-btn" onclick="toggleSettings()">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentInput = '';
+    
+    document.addEventListener('DOMContentLoaded', async () => {
+      currentInput = await window.electronAPI.getSelectedText();
+      document.getElementById('inputText').value = currentInput;
+      
+      window.electronAPI.onShowQA((text) => {
+        if (text) document.getElementById('inputText').value = text;
+      });
+      
+      window.electronAPI.onShowSettings(() => {
+        toggleSettings();
+      });
+    });
+    
+    function toggleSettings() {
+      const mainView = document.getElementById('mainView');
+      const settings = document.getElementById('settings');
+      
+      if (settings.classList.contains('active')) {
+        settings.classList.remove('active');
+        mainView.classList.add('active');
+      } else {
+        loadSettings();
+        settings.classList.add('active');
+        mainView.classList.remove('active');
+      }
+    }
+    
+    async function loadSettings() {
+      const config = await window.electronAPI.getConfig();
+      document.getElementById('apiKey').value = config.openai_api_key || '';
+      document.getElementById('apiEndpoint').value = config.openai_base_url || '';
+      document.getElementById('apiModel').value = config.openai_model || '';
+    }
+    
+    async function saveSettings() {
+      const config = {
+        openai_api_key: document.getElementById('apiKey').value,
+        openai_base_url: document.getElementById('apiEndpoint').value,
+        openai_model: document.getElementById('apiModel').value
+      };
+      
+      await window.electronAPI.saveConfig(config);
+      toggleSettings();
+    }
+    
+    async function callAI(prompt) {
+      const inputText = document.getElementById('inputText').value.trim();
+      if (!inputText) {
+        document.getElementById('output').textContent = '请输入内容';
+        return;
+      }
+      
+      const output = document.getElementById('output');
+      output.innerHTML = '<span class="loading">处理中...</span>';
+      
+      try {
+        const config = await window.electronAPI.getConfig();
+        const apiKey = config.openai_api_key;
+        const baseURL = config.openai_base_url;
+        const model = config.openai_model;
+        
+        if (!apiKey) {
+          output.innerHTML = '<span class="error">请先在设置中配置API Key</span>';
+          return;
+        }
+        
+        const response = await fetch(`${baseURL}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            model: model,
+            messages: [{ role: 'user', content: `${prompt}\n\n${inputText}` }],
+            temperature: 0.7
+          })
+        });
+        
+        const data = await response.json();
+        
+        if (data.choices && data.choices[0]) {
+          const result = data.choices[0].message.content;
+          output.textContent = result;
+          await window.electronAPI.setSelectedText(result);
+        } else {
+          output.innerHTML = `<span class="error">错误: ${JSON.stringify(data)}</span>`;
+        }
+      } catch (error) {
+        output.innerHTML = `<span class="error">请求失败: ${error.message}</span>`;
+      }
+    }
+    
+    async function translateText() {
+      await callAI('请将以下内容翻译成中文:');
+    }
+    
+    async function generateText() {
+      await callAI('请根据以下内容生成回复:');
+    }
+    
+    async function summarizeText() {
+      await callAI('请简洁总结以下内容:');
+    }
+    
+    async function explainText() {
+      await callAI('请详细解释以下内容:');
+    }
+    
+    document.getElementById('inputText').addEventListener('input', (e) => {
+      currentInput = e.target.value;
+    });
+  </script>
+</body>
+</html>
