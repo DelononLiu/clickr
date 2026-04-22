@@ -1,10 +1,9 @@
 {
   "build": {
-    "command": "bun install && bun run build:web",
+    "command": "npm run build:web",
     "output_dir": "public",
     "environment": {
-      "NODE_VERSION": "20",
-      "BUN_VERSION": "1"
+      "NODE_VERSION": "20"
     }
   }
 }

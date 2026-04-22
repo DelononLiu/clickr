@@ -3,10 +3,12 @@
   "version": "1.0.0",
   "type": "static",
   "build": {
-    "command": "bun run build:web",
-    "outputDir": "public"
+    "command": "bun install && bun run build:web",
+    "outputDir": "public",
+    "installCommand": "bun install"
   },
-  "platform": "cloudflare-pages",
+  "platform": "kilo",
+  "cleanInstall": true,
   "env": {
     "OPENAI_API_KEY": {
       "required": false,
@@ -20,5 +22,31 @@
       "required": false,
       "default": "gpt-3.5-turbo"
     }
-  }
+  },
+  "routes": [
+    {
+      "source": "/*",
+      "destination": "/index.html"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/*",
+      "headers": [
+        {
+          "key": "X-Frame-Options",
+          "value": "SAMEORIGIN"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        }
+      ]
+    }
+  ]
 }
+
