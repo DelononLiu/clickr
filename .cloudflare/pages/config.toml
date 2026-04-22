@@ -1,0 +1,9 @@
+[build]
+  publish = "public"
+  command = "bun run build:web"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+[[plugins]]
+  package = "@cloudflare/pages-plugin-static"

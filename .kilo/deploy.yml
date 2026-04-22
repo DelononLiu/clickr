@@ -1,0 +1,34 @@
+# Kilo Deploy Configuration
+# https://kilo.ai/docs/deploy-secure/deploy
+
+type: static
+name: clickr
+description: 跨平台桌面AI助手 - Web版本
+
+# 构建配置
+build:
+  command: bun run build:web
+  outputDir: public
+  nodeVersion: 20
+
+# 部署平台（Cloudflare Pages）
+platform: cloudflare-pages
+
+# 环境变量（在 Kilo Dashboard 中设置）
+env:
+  - name: OPENAI_API_KEY
+    required: false
+    description: OpenAI API Key
+  - name: OPENAI_BASE_URL
+    required: false
+    default: https://api.openai.com/v1
+  - name: OPENAI_MODEL
+    required: false
+    default: gpt-3.5-turbo
+
+# 自动部署
+autoDeploy: true
+branch: main
+
+# 自定义域名（可选）
+# customDomain: clickr.yourdomain.com

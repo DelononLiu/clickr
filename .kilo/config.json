@@ -1,0 +1,24 @@
+{
+  "name": "clickr",
+  "version": "1.0.0",
+  "type": "static",
+  "build": {
+    "command": "bun run build:web",
+    "outputDir": "public"
+  },
+  "platform": "cloudflare-pages",
+  "env": {
+    "OPENAI_API_KEY": {
+      "required": false,
+      "description": "OpenAI API Key (optional for demo)"
+    },
+    "OPENAI_BASE_URL": {
+      "required": false,
+      "default": "https://api.openai.com/v1"
+    },
+    "OPENAI_MODEL": {
+      "required": false,
+      "default": "gpt-3.5-turbo"
+    }
+  }
+}
