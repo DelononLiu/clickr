@@ -5,7 +5,7 @@
   "main": "src/main/index.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder --win",
+    "build": "electron-builder --win portable",
     "build:dir": "electron-builder --win --dir"
   },
   "dependencies": {
@@ -23,22 +23,14 @@
       "output": "dist"
     },
     "win": {
-      "target": ["nsis"],
-      "icon": "build/icon.ico"
+      "target": ["portable"]
     },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+    "portable": {
+      "artifactName": "Clickr.exe"
     },
     "files": [
       "src/**/*",
       "package.json"
-    ],
-    "extraResources": [
-      {
-        "from": "resources/",
-        "to": "resources/"
-      }
     ],
     "asar": true,
     "asarUnpack": [
