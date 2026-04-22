@@ -222,121 +222,188 @@
     </div>
   </div>
 
-  <script>
-    let currentInput = '';
-    
-    document.addEventListener('DOMContentLoaded', async () => {
-      currentInput = await window.electronAPI.getSelectedText();
-      document.getElementById('inputText').value = currentInput;
-      
-      window.electronAPI.onShowQA((text) => {
-        if (text) document.getElementById('inputText').value = text;
-      });
-      
-      window.electronAPI.onShowSettings(() => {
-        toggleSettings();
-      });
-    });
-    
-    function toggleSettings() {
-      const mainView = document.getElementById('mainView');
-      const settings = document.getElementById('settings');
-      
-      if (settings.classList.contains('active')) {
-        settings.classList.remove('active');
-        mainView.classList.add('active');
-      } else {
-        loadSettings();
-        settings.classList.add('active');
-        mainView.classList.remove('active');
-      }
-    }
-    
-    async function loadSettings() {
-      const config = await window.electronAPI.getConfig();
-      document.getElementById('apiKey').value = config.openai_api_key || '';
-      document.getElementById('apiEndpoint').value = config.openai_base_url || '';
-      document.getElementById('apiModel').value = config.openai_model || '';
-    }
-    
-    async function saveSettings() {
-      const config = {
-        openai_api_key: document.getElementById('apiKey').value,
-        openai_base_url: document.getElementById('apiEndpoint').value,
-        openai_model: document.getElementById('apiModel').value
-      };
-      
-      await window.electronAPI.saveConfig(config);
-      toggleSettings();
-    }
-    
-    async function callAI(prompt) {
-      const inputText = document.getElementById('inputText').value.trim();
-      if (!inputText) {
-        document.getElementById('output').textContent = '请输入内容';
-        return;
-      }
-      
-      const output = document.getElementById('output');
-      output.innerHTML = '<span class="loading">处理中...</span>';
-      
-      try {
-        const config = await window.electronAPI.getConfig();
-        const apiKey = config.openai_api_key;
-        const baseURL = config.openai_base_url;
-        const model = config.openai_model;
-        
-        if (!apiKey) {
-          output.innerHTML = '<span class="error">请先在设置中配置API Key</span>';
-          return;
-        }
-        
-        const response = await fetch(`${baseURL}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
-          },
-          body: JSON.stringify({
-            model: model,
-            messages: [{ role: 'user', content: `${prompt}\n\n${inputText}` }],
-            temperature: 0.7
-          })
-        });
-        
-        const data = await response.json();
-        
-        if (data.choices && data.choices[0]) {
-          const result = data.choices[0].message.content;
-          output.textContent = result;
-          await window.electronAPI.setSelectedText(result);
-        } else {
-          output.innerHTML = `<span class="error">错误: ${JSON.stringify(data)}</span>`;
-        }
-      } catch (error) {
-        output.innerHTML = `<span class="error">请求失败: ${error.message}</span>`;
-      }
-    }
-    
-    async function translateText() {
-      await callAI('请将以下内容翻译成中文:');
-    }
-    
-    async function generateText() {
-      await callAI('请根据以下内容生成回复:');
-    }
-    
-    async function summarizeText() {
-      await callAI('请简洁总结以下内容:');
-    }
-    
-    async function explainText() {
-      await callAI('请详细解释以下内容:');
-    }
-    
-    document.getElementById('inputText').addEventListener('input', (e) => {
-      currentInput = e.target.value;
-    });
-  </script>
+   <script>
+     // 环境检测与适配器
+     const isElectron = () => {
+       return typeof window !== 'undefined' &&
+              window.electronAPI &&
+              typeof window.electronAPI.getConfig === 'function';
+     };
+
+     // 配置管理适配器
+     const ConfigAdapter = {
+       async getConfig() {
+         if (isElectron()) {
+           return await window.electronAPI.getConfig();
+         } else {
+           const saved = localStorage.getItem('clickr_config');
+           const defaultConfig = {
+             openai_api_key: '',
+             openai_base_url: 'https://api.openai.com/v1',
+             openai_model: 'gpt-3.5-turbo'
+           };
+           return saved ? { ...defaultConfig, ...JSON.parse(saved) } : defaultConfig;
+         }
+       },
+
+       async saveConfig(config) {
+         if (isElectron()) {
+           return await window.electronAPI.saveConfig(config);
+         } else {
+           localStorage.setItem('clickr_config', JSON.stringify(config));
+           return true;
+         }
+       }
+     };
+
+     // 剪贴板适配器
+     const ClipboardAdapter = {
+       async readText() {
+         if (isElectron()) {
+           return await window.electronAPI.getSelectedText();
+         } else {
+           try {
+             return await navigator.clipboard.readText();
+           } catch (e) {
+             console.error('Clipboard read failed:', e);
+             return '';
+           }
+         }
+       },
+
+       async writeText(text) {
+         if (isElectron()) {
+           return await window.electronAPI.setSelectedText(text);
+         } else {
+           try {
+             await navigator.clipboard.writeText(text);
+           } catch (e) {
+             console.error('Clipboard write failed:', e);
+           }
+         }
+       }
+     };
+
+     // UI 状态管理
+     let currentInput = '';
+
+     document.addEventListener('DOMContentLoaded', async () => {
+       currentInput = await ClipboardAdapter.readText();
+       document.getElementById('inputText').value = currentInput;
+
+       if (isElectron()) {
+         window.electronAPI.onShowQA((text) => {
+           if (text) {
+             document.getElementById('inputText').value = text;
+             currentInput = text;
+           }
+         });
+
+         window.electronAPI.onShowSettings(() => {
+           toggleSettings();
+         });
+       }
+     });
+
+     function toggleSettings() {
+       const mainView = document.getElementById('mainView');
+       const settings = document.getElementById('settings');
+
+       if (settings.classList.contains('active')) {
+         settings.classList.remove('active');
+         mainView.classList.add('active');
+       } else {
+         loadSettings();
+         settings.classList.add('active');
+         mainView.classList.remove('active');
+       }
+     }
+
+     async function loadSettings() {
+       const config = await ConfigAdapter.getConfig();
+       document.getElementById('apiKey').value = config.openai_api_key || '';
+       document.getElementById('apiEndpoint').value = config.openai_base_url || '';
+       document.getElementById('apiModel').value = config.openai_model || '';
+     }
+
+     async function saveSettings() {
+       const config = {
+         openai_api_key: document.getElementById('apiKey').value,
+         openai_base_url: document.getElementById('apiEndpoint').value,
+         openai_model: document.getElementById('apiModel').value
+       };
+
+       await ConfigAdapter.saveConfig(config);
+       toggleSettings();
+     }
+
+     async function callAI(prompt) {
+       const inputText = document.getElementById('inputText').value.trim();
+       if (!inputText) {
+         document.getElementById('output').textContent = '请输入内容';
+         return;
+       }
+
+       const output = document.getElementById('output');
+       output.innerHTML = '<span class="loading">处理中...</span>';
+
+       try {
+         const config = await ConfigAdapter.getConfig();
+         const apiKey = config.openai_api_key;
+         const baseURL = config.openai_base_url;
+         const model = config.openai_model;
+
+         if (!apiKey) {
+           output.innerHTML = '<span class="error">请先在设置中配置API Key</span>';
+           return;
+         }
+
+         const response = await fetch(`${baseURL}/chat/completions`, {
+           method: 'POST',
+           headers: {
+             'Content-Type': 'application/json',
+             'Authorization': `Bearer ${apiKey}`
+           },
+           body: JSON.stringify({
+             model: model,
+             messages: [{ role: 'user', content: `${prompt}\n\n${inputText}` }],
+             temperature: 0.7
+           })
+         });
+
+         const data = await response.json();
+
+         if (data.choices && data.choices[0]) {
+           const result = data.choices[0].message.content;
+           output.textContent = result;
+           await ClipboardAdapter.writeText(result);
+         } else {
+           output.innerHTML = `<span class="error">错误: ${JSON.stringify(data)}</span>`;
+         }
+       } catch (error) {
+         output.innerHTML = `<span class="error">请求失败: ${error.message}</span>`;
+       }
+     }
+
+     async function translateText() {
+       await callAI('请将以下内容翻译成中文:');
+     }
+
+     async function generateText() {
+       await callAI('请根据以下内容生成回复:');
+     }
+
+     async function summarizeText() {
+       await callAI('请简洁总结以下内容:');
+     }
+
+     async function explainText() {
+       await callAI('请详细解释以下内容:');
+     }
+
+     document.getElementById('inputText').addEventListener('input', (e) => {
+       currentInput = e.target.value;
+     });
+   </script>
 </body>
 </html>
