@@ -3,12 +3,16 @@
   "version": "1.0.0",
   "description": "跨平台桌面AI助手",
   "main": "src/main/index.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DelononLiu/clickr.git"
+  },
   "scripts": {
     "start": "electron .",
     "build": "electron-builder --win portable",
     "build:dir": "electron-builder --win --dir",
-    "web": "bun run src/web/server.ts",
-    "build:web": "bun run scripts/build-web.ts"
+    "build:web": "bun run scripts/build-web.ts",
+    "dev:web": "bun run src/web/server.ts"
   },
   "dependencies": {
     "active-win": "^9.0.0",
