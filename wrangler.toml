@@ -1,0 +1,9 @@
+name = "clickr"
+compatibility_date = "2025-04-22"
+pages_build_output_dir = "public"
+
+[build]
+command = "bun run build:web"
+
+[build.environment]
+NODE_VERSION = "20"

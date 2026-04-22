@@ -4,7 +4,6 @@
  * 将应用打包为静态文件，可部署到任何静态托管平台
  */
 
-import { write, mkdir } from "bun";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { existsSync, unlinkSync, rmdirSync, mkdirSync, readdirSync, copyFileSync } from "fs";
@@ -16,7 +15,6 @@ const distDir = resolve(rootDir, "public");
 // 清理旧构建
 try {
   if (existsSync(distDir)) {
-    // 删除目录内所有文件
     const files = readdirSync(distDir);
     for (const file of files) {
       unlinkSync(resolve(distDir, file));
@@ -38,15 +36,12 @@ const destHtml = resolve(distDir, "index.html");
 copyFileSync(srcHtml, destHtml);
 console.log("✅ 复制 index.html");
 
-// 可选：复制其他静态资源（如图标）
+// 复制静态资源（图标等）
 const srcPublic = resolve(rootDir, "public");
 try {
   const entries = readdirSync(srcPublic);
   for (const entry of entries) {
-    copyFileSync(
-      resolve(srcPublic, entry),
-      resolve(distDir, entry)
-    );
+    copyFileSync(resolve(srcPublic, entry), resolve(distDir, entry));
     console.log(`✅ 复制 ${entry}`);
   }
 } catch (e) {
@@ -55,9 +50,3 @@ try {
 
 console.log("\n🎉 Web 版本构建完成！");
 console.log("📁 输出目录:", distDir);
-console.log("📤 可将 public/ 目录部署到:");
-console.log("   - Cloudflare Pages");
-console.log("   - Vercel");
-console.log("   - Netlify");
-console.log("   - GitHub Pages");
-console.log("   - 任何静态文件托管服务");
