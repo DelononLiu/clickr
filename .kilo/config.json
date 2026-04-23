@@ -1,11 +1,11 @@
 {
   "name": "clickr",
   "version": "1.0.0",
-  "type": "static",
+  "type": "nextjs",
   "build": {
-    "command": "bun install && bun run build:web",
-    "outputDir": "public",
-    "installCommand": "bun install"
+    "command": "npm run build:web",
+    "outputDir": ".next",
+    "installCommand": "npm install --ignore-scripts"
   },
   "platform": "kilo",
   "cleanInstall": true,
@@ -21,32 +21,12 @@
     "OPENAI_MODEL": {
       "required": false,
       "default": "gpt-3.5-turbo"
+    },
+    "NPM_CONFIG_IGNORE_SCRIPTS": {
+      "required": false,
+      "default": "true",
+      "description": "Skip native module builds (active-win) during install"
     }
-  },
-  "routes": [
-    {
-      "source": "/*",
-      "destination": "/index.html"
-    }
-  ],
-  "headers": [
-    {
-      "source": "/*",
-      "headers": [
-        {
-          "key": "X-Frame-Options",
-          "value": "SAMEORIGIN"
-        },
-        {
-          "key": "X-Content-Type-Options",
-          "value": "nosniff"
-        },
-        {
-          "key": "Referrer-Policy",
-          "value": "strict-origin-when-cross-origin"
-        }
-      ]
-    }
-  ]
+  }
 }
 

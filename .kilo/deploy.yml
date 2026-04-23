@@ -1,18 +1,15 @@
 # Kilo Deploy Configuration
 # https://kilo.ai/docs/deploy-secure/deploy
 
-type: static
 name: clickr
-type: static
-description: 跨平台桌面AI助手 - Web版本
+type: nextjs
+description: 跨平台桌面AI助手 - Next.js Web版本
 
 build:
-  command: bun install && bun run build:web
-  outputDir: public
-  nodeVersion: 20
-  bunVersion: 1
+  command: npm run build:web
+  outputDir: .next
 
-platform: kilostatic
+platform: kilo
 autoDeploy: true
 branch: main
 
