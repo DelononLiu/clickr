@@ -66,7 +66,7 @@ func posFile() string {
 	if err != nil || dir == "" {
 		return ""
 	}
-	return filepath.Join(dir, "NexusKB", "ball.pos")
+	return filepath.Join(dir, "kb-sniffer", "ball.pos")
 }
 
 func loadBallPos() (point, bool) {

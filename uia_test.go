@@ -4,8 +4,8 @@
 //
 // 交叉编译后直接跑：
 //
-//	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o nkb.test.exe .
-//	./nkb.test.exe -test.v
+//	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o kb-sniffer.test.exe .
+//	./kb-sniffer.test.exe -test.v
 
 package main
 
@@ -30,7 +30,7 @@ func TestUIAElementVtableOffsets(t *testing.T) {
 		t.Skipf("该环境拿不到 CUIAutomation: %v", err)
 	}
 
-	hwnd, edit := createEditTestWindow(t, "NexusKB-UIA-OFFSET-CHECK")
+	hwnd, edit := createEditTestWindow(t, "kb-sniffer-UIA-OFFSET-CHECK")
 	defer pDestroyWindow.Call(hwnd)
 
 	r, _ := windowRect(edit)
@@ -135,7 +135,7 @@ func TestUIAReadsRealSelection(t *testing.T) {
 var uiaSlotProbe = flag.Int("uia-slot", 0, "把哪个 IUIAutomationTextPattern 槽位当 GetSelection 调用来探测")
 
 // 机械探测：把某个槽位当作 GetSelection 调一次，把结果打出来。
-// 槽位号从环境变量 NKB_SLOT 读 —— 每个槽位单独跑一个进程，
+// 槽位号从环境变量 KBS_SLOT 读 —— 每个槽位单独跑一个进程，
 // 这样即使某个槽位是错的（会直接崩），也只影响那一次探测。
 func TestUIASlotProbe(t *testing.T) {
 	if *uiaSlotProbe == 0 {

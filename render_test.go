@@ -4,8 +4,8 @@
 //
 // 交叉编译后直接跑：
 //
-//	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o nkb.test.exe .
-//	./nkb.test.exe -test.v
+//	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o kb-sniffer.test.exe .
+//	./kb-sniffer.test.exe -test.v
 
 package main
 

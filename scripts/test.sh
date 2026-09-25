@@ -13,19 +13,21 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+APP=kb-sniffer
 DIST=dist
+
 # 放一份到 Windows 侧再执行：interop 启动 Windows 进程时，
 # 从 Windows 原生路径跑最稳（Linux 路径会被翻译成 UNC，个别 API 会挑剔）。
 # 用系统临时目录，别弄脏部署目录。
-WIN_DIR="${NKB_TEST_DIR:-/mnt/c/Users/long2015/AppData/Local/Temp/nexuskb-test}"
+WIN_DIR="${KBS_TEST_DIR:-/mnt/c/Users/long2015/AppData/Local/Temp/kb-sniffer-test}"
 
 export GOOS=windows
 export GOARCH=amd64
 export CGO_ENABLED=0
 
 mkdir -p "$DIST" "$WIN_DIR"
-go test -c -o "$DIST/nkb.test.exe" .
-cp -f "$DIST/nkb.test.exe" "$WIN_DIR/"
+go test -c -o "$DIST/$APP.test.exe" .
+cp -f "$DIST/$APP.test.exe" "$WIN_DIR/"
 
 cd "$WIN_DIR"
-./nkb.test.exe -test.timeout 250s "$@"
+"./$APP.test.exe" -test.timeout 250s "$@"

@@ -1,4 +1,4 @@
-# NexusKB 架构设计
+# kb-sniffer 架构设计
 
 **读者**：要改动这个项目的人。
 **不在这里的内容**：怎么用 → `README.md`；为什么这么选 → `docs/decisions.md`；哪里还欠着 → `docs/design-debt.md`。
@@ -386,10 +386,41 @@ UIA 会引入两条新的跨线程路径（异步的选区矩形、可能失败�
 
 ---
 
+## 9. 命名约定
+
+**两个名字，各管一摊** —— 这不是随意的，两个场合的惯例不同：
+
+| 用在哪 | 用哪个 | 为什么 |
+|---|---|---|
+| 仓库名、模块路径、可执行文件名 | `kb-sniffer` | 跟仓库一致是惯例；`go install` 从模块路径末段取二进制名，会产出 `kb-sniffer` |
+| AppData 目录、日志文件、窗口标题、弹框标题 | `kb-sniffer` | 给文件系统和给人看的，kebab 可读、grep 得到 |
+| **窗口类名** | **`KBSniffer*`** | 它是 **Win32 标识符**，不是展示名 |
+
+一句话规则：**给人看/给文件系统看的用 `kb-sniffer`，作为 Win32 标识符出现的用 `KBSniffer`。**
+
+类名用 PascalCase 无连字符，是跟着 Win32 生态的惯例走的。实测读到的真实窗口类名：
+
+```
+ConsoleWindowClass              Notepad
+CASCADIA_HOSTING_WINDOW_CLASS   Shell_TrayWnd
+Chrome_WidgetWin_1              mintty
+```
+
+**没有一个用连字符**。类名是"这是哪个程序的东西"的标识符，
+`KBSnifferFloatBall` 一眼能认出是应用类名，`kb-sniffer-ball` 更像 CSS 类名。
+
+> 改名字时要覆盖的完整清单（容易漏）：
+> 模块路径、exe 名、窗口类名、窗口标题、弹框标题、日志前缀、日志文件名、
+> AppData/配置目录名、dump 文件扩展名、脚本里的环境变量前缀（`KBS_*`）、
+> 脚本里的默认路径、测试窗口类名与测试标记字符串。改完用
+> `grep -rIn -e 旧名 -e 旧名小写 .` 扫一遍确认无残留。
+
+---
+
 ## 9. 目录结构
 
 ```
-NexusKB/
+kb-sniffer/
   *.go              15 个生产文件（见 §3）+ 7 个 *_test.go
   scripts/          build.sh / test.sh / deploy.sh
   docs/             architecture.md / decisions.md / design-debt.md
@@ -421,8 +452,8 @@ Go 里「目录 = 包」，不是"分类文件夹"。判断该不该建包看四
 22 个测试，**在真 Windows 上跑**（渲染依赖 GDI，无法在 Linux 执行）：
 
 ```sh
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o nkb.test.exe .
-./nkb.test.exe -test.v          # 经 WSL interop 执行
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o kb-sniffer.test.exe .
+./kb-sniffer.test.exe -test.v          # 经 WSL interop 执行
 ```
 
 | 区域 | 覆盖 | 有效性 |

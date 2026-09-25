@@ -8,14 +8,18 @@
 # 却把旧的 exe 部署了出去，用户测的全程是旧版；而我当时用「源文件与目标
 # 文件 md5 一致」去校验，那只证明复制没出错，**证明不了源文件是新的**。
 # 现在每次构建都注入时间戳，并且机械校验它真的写进了二进制；
-# 部署后可以直接问产物自己：dist/NexusKB-debug.exe -version
+# 部署后可以直接问产物自己：dist/kb-sniffer-debug.exe -version
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# 名字集中在这里。改项目名只动这一行 ——
+# 散在各处的话，改名一定会漏（这次改名实测漏了 88 处）。
+APP=kb-sniffer
+
 DIST=dist
-OUT="$DIST/NexusKB.exe"
-DEBUG_OUT="$DIST/NexusKB-debug.exe"
+OUT="$DIST/$APP.exe"
+DEBUG_OUT="$DIST/$APP-debug.exe"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
 export GOOS=windows

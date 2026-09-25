@@ -4,8 +4,8 @@
 //
 // 交叉编译后直接跑：
 //
-//	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o nkb.test.exe .
-//	./nkb.test.exe -test.v
+//	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o kb-sniffer.test.exe .
+//	./kb-sniffer.test.exe -test.v
 
 package main
 
@@ -24,7 +24,7 @@ func TestClipboardSnapshotSurvivesOverwrite(t *testing.T) {
 	userSnap := snapshotClipboard()
 	defer userSnap.restore()
 
-	const marker = "NexusKB 快照往返测试 A1B2C3"
+	const marker = "kb-sniffer 快照往返测试 A1B2C3"
 	if err := setClipboardText(marker); err != nil {
 		t.Skipf("写剪贴板失败（可能有别的程序占着）: %v", err)
 	}

@@ -4,8 +4,8 @@
 //
 // 交叉编译后直接跑：
 //
-//	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o nkb.test.exe .
-//	./nkb.test.exe -test.v
+//	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o kb-sniffer.test.exe .
+//	./kb-sniffer.test.exe -test.v
 
 package main
 
@@ -31,8 +31,8 @@ func TestMSAAReadsTextFromRealControl(t *testing.T) {
 		t.Fatalf("OleInitialize 失败: %v", err)
 	}
 
-	const cls = "NexusKBMSAATestWnd"
-	const marker = "NexusKB-MSAA-TEST-8823"
+	const cls = "KBSnifferMSAATestWnd"
+	const marker = "kb-sniffer-MSAA-TEST-8823"
 	// 测试窗口自己的 WndProc：全部交给 DefWindowProc，
 	// 避免和产品窗口的消息处理互相干扰
 	testWndProc := syscall.NewCallback(func(hwnd, message, wparam, lparam uintptr) uintptr {
@@ -60,7 +60,7 @@ func TestMSAAReadsTextFromRealControl(t *testing.T) {
 	hwnd, _, err := pCreateWindowExW.Call(
 		uintptr(wsExTopmost),
 		uintptr(unsafe.Pointer(utf16Ptr(cls))),
-		uintptr(unsafe.Pointer(utf16Ptr("NexusKB MSAA test"))),
+		uintptr(unsafe.Pointer(utf16Ptr("kb-sniffer MSAA test"))),
 		uintptr(wsPopup),
 		uintptr(x), uintptr(y), uintptr(w), uintptr(h),
 		0, 0, getModuleHandle(), 0)

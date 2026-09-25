@@ -4,8 +4,8 @@
 //
 // 交叉编译后直接跑：
 //
-//	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o nkb.test.exe .
-//	./nkb.test.exe -test.v
+//	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o kb-sniffer.test.exe .
+//	./kb-sniffer.test.exe -test.v
 
 package main
 
@@ -69,7 +69,7 @@ func (f fakeSource) Read(captureContext, point) (selection, error) {
 // UIA 的 TextPattern 是「选区」级的，所以必须有真控件才能验。
 func createEditTestWindow(t *testing.T, text string) (hwnd, edit uintptr) {
 	t.Helper()
-	const cls = "NexusKBUIATestWnd"
+	const cls = "KBSnifferUIATestWnd"
 	testWndProc := syscall.NewCallback(func(h, m, w, l uintptr) uintptr {
 		r, _, _ := pDefWindowProcW.Call(h, m, w, l)
 		return r
@@ -97,7 +97,7 @@ func createEditTestWindow(t *testing.T, text string) (hwnd, edit uintptr) {
 	hwnd, _, err := pCreateWindowExW.Call(
 		uintptr(wsExTopmost),
 		uintptr(unsafe.Pointer(utf16Ptr(cls))),
-		uintptr(unsafe.Pointer(utf16Ptr("NexusKB UIA test"))),
+		uintptr(unsafe.Pointer(utf16Ptr("kb-sniffer UIA test"))),
 		uintptr(wsPopup),
 		uintptr(x), uintptr(y), uintptr(w), uintptr(h),
 		0, 0, getModuleHandle(), 0)
