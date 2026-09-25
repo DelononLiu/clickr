@@ -139,8 +139,9 @@ func main() {
 	// ---- 5) 采集线程 ----
 	captureSvc = newCaptureService(captureSelection, func(res captureResult) {
 		setLastSelection(res.text)
-		log.Printf("[capture] 取到 %d 字（来源=%s，耗时 %v）: %.40q",
-			len([]rune(res.text)), res.method, res.elapsed.Round(1e6), res.text)
+		log.Printf("[capture] 取到 %d 字（来源=%s 程序=%q 耗时 %v）: %.40q",
+			len([]rune(res.text)), res.method, res.foregroundClass,
+			res.elapsed.Round(1e6), res.text)
 		// UIA 能给出选区矩形时就用选区末尾当锚点，比鼠标抬起点准。
 		// 剪贴板法没有矩形，退回鼠标点。
 		anchor := res.anchor

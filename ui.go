@@ -454,6 +454,14 @@ func showMenu(anchor point, model menuModel) {
 	menuPos = placeMenu(anchor, w, h)
 	menuSurf.present(hwndMenu, menuPos.X, menuPos.Y)
 
+	// 运行期证据：菜单显示前后，前台窗口分别是谁。
+	//
+	// 「不抢焦点」是本项目的硬要求（一旦抢了焦点，源程序的选区会被清掉，
+	// 后续 Ctrl+C 也就复制不到东西）。静态上我们只用了 WS_EX_NOACTIVATE +
+	// SWP_NOACTIVATE，从不调 SetForegroundWindow/ShowWindow —— 但那只证明
+	// "没写激活代码"，证明不了运行期实际行为。这一行是量出来的。
+	logForegroundAfterMenuShown()
+
 	card := menuCardRect()
 	menuRectMu.Lock()
 	menuScreenRect = rect{
@@ -475,6 +483,23 @@ func hideMenu() {
 	}
 	menuHover = -1
 	showWindow(hwndMenu, swHide)
+}
+
+// logForegroundAfterMenuShown 记录菜单出现后的前台窗口，用来验证「不抢焦点」。
+//
+// 判据：菜单显示之后，前台窗口**必须仍然是源程序**。
+// 如果变成我们自己的窗口（NexusKBFloatBall / NexusKBSelectMenu），
+// 那就是抢了焦点，属于严重回归。
+func logForegroundAfterMenuShown() {
+	fg, _, _ := pGetForegroundWindow.Call()
+	class := windowClass(fg)
+	ours := fg == hwndBall || fg == hwndMenu
+	if ours {
+		log.Printf("[focus] ⚠️ 菜单显示后前台窗口变成了我们自己（class=%q hwnd=%#x）—— "+
+			"抢焦点了，源程序的选区会被清掉", class, fg)
+		return
+	}
+	log.Printf("[focus] 菜单显示后前台窗口仍是 %q（未抢焦点）", foregroundWindowLabel())
 }
 
 // hideMenuIfOutside 由鼠标钩子线程在「左键按下」时调用。

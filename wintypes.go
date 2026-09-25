@@ -353,6 +353,41 @@ var consoleWindowClasses = map[string]bool{
 
 func isConsoleClass(class string) bool { return consoleWindowClasses[class] }
 
+// windowTitle 取窗口标题。
+//
+// 存在的理由：窗口**类名不足以区分应用** —— VS Code、Chrome、Edge、Slack
+// 都是 Electron/Chromium，类名统统是 "Chrome_WidgetWin_1"。
+// 结果看日志时完全分不出「这次划词发生在哪个程序」，只能靠人去记。
+// 标题能把它们分开（"xxx - Visual Studio Code" / 页面标题）。
+func windowTitle(hwnd uintptr) string {
+	n, _, _ := pGetWindowTextLengthW.Call(hwnd)
+	if n == 0 {
+		return ""
+	}
+	buf := make([]uint16, int(n)+1)
+	got, _, _ := pGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	if got == 0 {
+		return ""
+	}
+	return syscall.UTF16ToString(buf[:got])
+}
+
+// foregroundWindowLabel 给日志用：类名 + 标题。
+func foregroundWindowLabel() string {
+	hwnd, _, _ := pGetForegroundWindow.Call()
+	if hwnd == 0 {
+		return "(无前台窗口)"
+	}
+	title := windowTitle(hwnd)
+	if title == "" {
+		return windowClass(hwnd)
+	}
+	if len([]rune(title)) > 48 {
+		title = string([]rune(title)[:48]) + "…"
+	}
+	return windowClass(hwnd) + " | " + title
+}
+
 func windowClass(hwnd uintptr) string {
 	var buf [128]uint16
 	n, _, _ := pGetClassNameW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))

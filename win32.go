@@ -82,6 +82,8 @@ var (
 	pSetFocus                 = user32.NewProc("SetFocus")
 	pSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
 	pGetClassNameW            = user32.NewProc("GetClassNameW")
+	pGetWindowTextW           = user32.NewProc("GetWindowTextW")
+	pGetWindowTextLengthW     = user32.NewProc("GetWindowTextLengthW")
 	pSetCursorPos             = user32.NewProc("SetCursorPos")
 	pWindowFromPoint          = user32.NewProc("WindowFromPoint")
 	pGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")

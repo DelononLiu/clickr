@@ -144,6 +144,15 @@ drag @(1494,794)  →  来源=uia  17 字  "字节=32 时间<1ms TTL="   耗时 
 **守门**：先问 provider `GetSupportedTextSelection`，返回 `None(0)` 就直接放弃，
 避免重演 MSAA 那次"弹出内容不对的菜单"。
 
+**实测补充（关于「不抢焦点」）**：在 VS Code 编辑区 / VS Code 终端 / 浏览器三处各划一次，
+日志里的 `[focus] 菜单显示后前台窗口仍是 …（未抢焦点）` 三处全部成立；
+更早一轮 13 次划词也是 13 次未抢焦点。**终端里选区消失不是抢焦点造成的**
+—— 终端在 Ctrl+C 复制之后自己清掉了选区（编辑器复制后则保留高亮，
+这就是"只有终端有问题"的原因）。
+
+> 这也是为什么日志要带**窗口标题**而不只是类名：VS Code、Chrome、Edge、Slack 的窗口类名
+> 全都是 `Chrome_WidgetWin_1`，光看类名根本分不出这次划词发生在哪个程序里。
+
 **仍然没做的**：控制台 API（`AttachConsole` → `GetConsoleSelectionInfo` →
 `ReadConsoleOutputCharacterW`）。UIA 已经把这条覆盖了，除非遇到 UIA 读不到的终端才需要。
 

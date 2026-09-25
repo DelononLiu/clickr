@@ -104,6 +104,12 @@ type captureResult struct {
 	ok     bool
 	method string
 
+	// foregroundClass 是采集发生时前台窗口的类名。
+	// 带上它是为了让日志自解释 —— 否则看日志只能靠坐标去猜
+	// 「这次划词发生在哪个程序里」，而不同程序的行为差别很大
+	// （编辑器复制后保留选区、终端复制后清掉）。
+	foregroundClass string
+
 	// reason 区分「确实没有选区」与「读取失败」。以前只有 ok 一个布尔，
 	// 两者对用户和上层含义完全不同，却长得一样。
 	reason error
@@ -138,7 +144,8 @@ func (c *captureService) start() {
 				req.reply <- res
 			}
 			if !res.ok {
-				log.Printf("[capture] 未取到文本（%s，method=%s）", req.how, res.method)
+				log.Printf("[capture] 未取到文本（%s，程序=%q，method=%s）",
+					req.how, res.foregroundClass, res.method)
 				continue
 			}
 			if c.isDuplicate(res.text) {
@@ -193,7 +200,11 @@ func (c *captureService) isDuplicate(text string) bool {
 // pipeline 里，加一种取文手段不需要动这个函数。
 func captureSelection(req captureRequest) captureResult {
 	start := time.Now()
-	res := captureResult{anchor: req.anchor, how: req.how}
+	res := captureResult{
+		anchor:          req.anchor,
+		how:             req.how,
+		foregroundClass: foregroundWindowLabel(),
+	}
 
 	sel, err := capturePipelineDefault.Read(req.anchor)
 	res.elapsed = time.Since(start)
@@ -209,7 +220,7 @@ func captureSelection(req captureRequest) captureResult {
 		res.reason = err
 	default:
 		res.reason = err
-		log.Printf("[capture] 取文失败（%s）: %v", req.how, err)
+		log.Printf("[capture] 取文失败（%s，程序=%q）: %v", req.how, res.foregroundClass, err)
 	}
 	return res
 }
