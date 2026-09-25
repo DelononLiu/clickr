@@ -326,12 +326,15 @@ func hasConsole() bool {
 //
 // 只能按窗口类名判。VS Code 的集成终端是 Electron 窗口（Chrome_WidgetWin_1），
 // 和它的编辑器区无法区分，所以那种情况拦不住。
-func foregroundIsConsole() bool {
+func foregroundIsConsole() bool { return isConsoleClass(foregroundWindowClass()) }
+
+// foregroundWindowClass 返回前台窗口的类名（拿不到就是空串）。
+func foregroundWindowClass() string {
 	hwnd, _, _ := pGetForegroundWindow.Call()
 	if hwnd == 0 {
-		return false
+		return ""
 	}
-	return isConsoleClass(windowClass(hwnd))
+	return windowClass(hwnd)
 }
 
 // consoleWindowClasses 是「真控制台」的窗口类名表。

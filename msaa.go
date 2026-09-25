@@ -231,29 +231,38 @@ func msaaTextAt(pt point) (msaaResult, bool) {
 
 	// 值优先（可编辑控件、文本视图的文字在 accValue），
 	// 拿不到再退回名字（静态文本节点的文字通常挂在 accName 上）。
-	if v, ok := a.accString(accGetAccValue, &child); ok && normalizeMSAAText(v) != "" {
-		res.text, res.viaValue = normalizeMSAAText(v), true
+	//
+	// 这里返回**原始**文本、不做截断：截断预算是调用方（msaaSource）的事，
+	// 提供者去读消费者的常量会把依赖方向弄反。
+	if v, ok := a.accString(accGetAccValue, &child); ok && v != "" {
+		res.text, res.viaValue = v, true
 		return res, true
 	}
-	if n, ok := a.accString(accGetAccName, &child); ok && normalizeMSAAText(n) != "" {
-		res.text = normalizeMSAAText(n)
+	if n, ok := a.accString(accGetAccName, &child); ok && n != "" {
+		res.text = n
 		return res, true
 	}
 	return msaaResult{}, false
 }
 
-// normalizeMSAAText 清理 MSAA 返回的文本。
+// normalizeMSAAText 清理可访问对象返回的文本。
 //
-// 可访问对象的文本可能带大量首尾空白（尤其是控制台/文本视图），
-// 也可能是一整屏内容（比如整个控制台缓冲区），这里统一去掉首尾空白并截断。
-func normalizeMSAAText(s string) string {
+// 它可能带大量首尾空白（尤其是控制台/文本视图），也可能是一整屏内容
+// （比如整个控制台缓冲区），这里统一去空白并按预算截断。
+//
+// 预算由调用方传入，而不是读包级常量 —— 之前 msaa.go 反过来读 capture.go 的常量，
+// 等于「提供者知道消费者的预算」，依赖方向是反的。
+func normalizeMSAAText(s string, maxRunes int) string {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return ""
 	}
+	if maxRunes <= 0 {
+		return s
+	}
 	r := []rune(s)
-	if len(r) > maxMSAATextRunes {
-		return string(r[:maxMSAATextRunes]) + "…"
+	if len(r) > maxRunes {
+		return string(r[:maxRunes]) + "…"
 	}
 	return s
 }

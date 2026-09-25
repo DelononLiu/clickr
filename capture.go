@@ -48,9 +48,6 @@ const (
 	// 避免有人复制了一个巨大的东西把内存吃光。
 	maxClipFormatBytes = 32 << 20
 	maxClipTotalBytes  = 96 << 20
-	// MSAA 兜底取到的文本上限。有些可访问对象（比如整个控制台缓冲区）
-	// 会返回一大坨，对划词助手没意义，截断掉。
-	maxMSAATextRunes = 2000
 )
 
 type captureRequest struct {
@@ -101,11 +98,21 @@ func newCaptureService(work func(captureRequest) captureResult, cb func(captureR
 // ---------------------------------------------------------------- 结果
 
 type captureResult struct {
-	text    string
-	anchor  point
-	how     string
-	ok      bool
-	method  string
+	text   string
+	anchor point
+	how    string
+	ok     bool
+	method string
+
+	// reason 区分「确实没有选区」与「读取失败」。以前只有 ok 一个布尔，
+	// 两者对用户和上层含义完全不同，却长得一样。
+	reason error
+
+	// UIA 能给出真正的选区矩形；拿到了就用它当弹窗锚点，
+	// 比用鼠标抬起点准（反向拖选时差别明显）。
+	bounds    rect
+	hasBounds bool
+
 	elapsed time.Duration
 }
 
@@ -180,93 +187,30 @@ func (c *captureService) isDuplicate(text string) bool {
 
 // ---------------------------------------------------------------- 主流程
 
+// captureSelection 是采集线程的工作函数：调 pipeline，把结果翻译成 captureResult。
+//
+// 这里刻意保持很薄 —— 「有哪些手段、谁先谁后、这个环境下谁可用」全在 selection.go 的
+// pipeline 里，加一种取文手段不需要动这个函数。
 func captureSelection(req captureRequest) captureResult {
 	start := time.Now()
 	res := captureResult{anchor: req.anchor, how: req.how}
 
-	// 0) 前台是真正的控制台窗口时，**只走 MSAA，绝不发 Ctrl+C**。
-	//
-	// 控制台里 Ctrl+C 的语义是「中断」而不是「复制」，我们合成的那次 Ctrl+C
-	// 会被透传给 shell —— 用户正在跑的长任务会被我们打断。
-	// 这个副作用比「取不到词」严重得多，所以这里连试都不试剪贴板。
-	// 但 MSAA 是只读的、无副作用，试一下没坏处：控制台本身给不出什么，
-	// 而 VS Code 那种 Electron 终端有时能给出整行文字。
-	if foregroundIsConsole() {
-		res.method = "skipped-console"
-		// 这里刻意什么都不做。
-		//
-		// 试过用 MSAA 兜底，但实测**拿到的是错的文本**：可访问对象给出的是
-		// 控制台窗口自身的名字/整块缓冲区，而不是用户拖选的那一段。
-		// 弹出一个内容不对的菜单比不弹更糟，所以宁可什么都不弹。
-		//
-		// 也刻意不发 Ctrl+C：控制台里 Ctrl+C 是「中断」而非「复制」，
-		// 会被透传给 shell 把用户正在跑的命令打断。
-		//
-		// 真控制台要拿到选区，正路是控制台自己的 API：
-		//   AttachConsole(pid) → GetConsoleSelectionInfo() → ReadConsoleOutputCharacterW()
-		// 这条还没实现（见 README 的「下一步」）。
-		log.Printf("[capture] 前台是控制台窗口，已跳过（不发 Ctrl+C 以免打断你的命令；" +
-			"读真控制台的选区需要控制台 API，尚未实现）")
-		return res
-	}
-
-	// 1) 等源程序把选区落到剪贴板
-	sleepMS(selectionSettleMS)
-
-	// 2) 记录当前剪贴板状态
-	beforeSeq := clipboardSequence()
-	beforeText, _ := readClipboardText()
-
-	// 3) 逐格式快照用户原来的剪贴板
-	snap := snapshotClipboard()
-	defer snap.freeNotOwned()
-
-	// 4) 触发复制
-	sendCtrlC()
-
-	// 5) 等剪贴板更新
-	deadline := time.Now().Add(clipboardWaitMS * time.Millisecond)
-	for time.Now().Before(deadline) {
-		sleepMS(15)
-		if clipboardSequence() != beforeSeq {
-			if text, ok := readClipboardText(); ok && text != "" {
-				res.text, res.ok, res.method = text, true, "clipboard-seq"
-				break
-			}
-		}
-	}
-
-	// 6) 序列号没变但内容变了的情况（有些程序复制相同内容不动序列号）
-	if !res.ok {
-		if text, ok := readClipboardText(); ok && text != "" && text != beforeText {
-			res.text, res.ok, res.method = text, true, "clipboard-diff"
-		}
-	}
-
-	// 7) 还原用户原本的剪贴板
-	if len(snap.dropped) > 0 {
-		log.Printf("[capture] 警告：有 %d 个剪贴板格式无法快照（非 HGLOBAL 或超限），"+
-			"还原后这些格式会丢失: %v", len(snap.dropped), snap.dropped)
-	}
-	if !snap.restore() {
-		log.Printf("[capture] 剪贴板还原失败：用户原来的剪贴板内容已丢失"+
-			"（快照 ok=%v，含 %d 个格式）", snap.ok, len(snap.formats))
-	}
-
-	// 8) 剪贴板法失败时用 MSAA 兜底。
-	//
-	// 顺序是刻意的：**剪贴板优先**，因为只有它能拿到用户真正拖选的那一段；
-	// MSAA 拿到的只是「鼠标点所在的那个元素/词/行」，精度更低。
-	// 所以 MSAA 只在剪贴板拿不到东西时补位（典型场景：那个程序里
-	// Ctrl+C 不是复制，比如 VS Code 的集成终端）。
-	if !res.ok {
-		if r, ok := msaaTextAt(req.anchor); ok {
-			res.text, res.ok, res.method = r.text, true, "msaa-fallback"
-			log.Printf("[capture] 剪贴板法未取到，改用 MSAA 兜底: %d 字", len([]rune(r.text)))
-		}
-	}
-
+	sel, err := capturePipelineDefault.Read(req.anchor)
 	res.elapsed = time.Since(start)
+
+	switch {
+	case err == nil:
+		res.text = sel.Text
+		res.method = string(sel.Source)
+		res.bounds, res.hasBounds = sel.Bounds, sel.HasBounds
+		res.ok = true
+	case errors.Is(err, ErrNoSelection), errors.Is(err, ErrUnsupported):
+		// 明确「没有选区」或「这个控件给不出文本」—— 不是故障，不报错
+		res.reason = err
+	default:
+		res.reason = err
+		log.Printf("[capture] 取文失败（%s）: %v", req.how, err)
+	}
 	return res
 }
 

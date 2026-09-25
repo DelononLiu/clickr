@@ -68,7 +68,28 @@ type cmdHideIfOutside struct{ pt point }   // 判定移回 UI 线程
 
 ---
 
-## 🔴 第 2 项：`TextSource` 抽象 + 错误分类
+## ✅ 已完成：`TextSource` 抽象 + 错误分类（原第 2 项）
+
+**结论：已落地（`selection.go`）。UIA 现在是「新增一个文件 + sources 加一行」。**
+
+实现要点：
+- `selection{Text, Source, Bounds, HasBounds}` —— 把 UIA 的主要收益（**选区矩形**）在类型上留出位置；
+  剪贴板法给不出矩形，MSAA 给的是元素矩形，UIA 能给真正的选区矩形
+- `ErrNoSelection` / `ErrUnsupported` / `ErrReadFailed` 三者分开 —— 「用户确实没选东西」
+  与「读取失败」对上层和用户含义完全不同，以前被压成一个 `bool`
+- `captureContext{ForegroundClass, IsConsole}` 由 pipeline 探一次传给所有 source，
+  不再让每个 source 各自去问「前台窗口是什么」
+- **「顺序是刻意的」从控制流变成了数据结构**：`sources` 切片顺序即优先级；
+  真控制台里剪贴板源 `Available()==false`（不发 Ctrl+C 防打断），
+  MSAA 源也不可用（实测返回窗口自身信息）
+- 多 source 错误优先级：真实故障 > 明确没选区 > 控件不支持
+- `maxMSAATextRunes` 从构造参数传入，`msaa.go` 读 `capture.go` 常量那个反向依赖消失了
+
+**可测性**：`fakeSource` + `ReadIn(注入的 context)` 让策略本身可断言，
+不必再拿开发者真实剪贴板当 fixture。新增 7 个测试覆盖优先级、跳过、
+控制台拒发 Ctrl+C、错误区分、空白文本、矩形透传、默认顺序。
+
+<details><summary>原始评审结论（保留）</summary>
 
 **影响：高。成本：低。是第 1 项之后、UIA 之前的前置。**
 
@@ -116,6 +137,8 @@ type selectionReader interface {
     Read(ctx context.Context, at point) (selection, error)
 }
 ```
+
+</details>
 
 **收益**：
 

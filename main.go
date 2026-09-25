@@ -130,9 +130,16 @@ func main() {
 	// ---- 5) 采集线程 ----
 	captureSvc = newCaptureService(captureSelection, func(res captureResult) {
 		setLastSelection(res.text)
-		log.Printf("[capture] 取到 %d 字（%s，耗时 %v）: %.40q",
+		log.Printf("[capture] 取到 %d 字（来源=%s，耗时 %v）: %.40q",
 			len([]rune(res.text)), res.method, res.elapsed.Round(1e6), res.text)
-		queueMenu(res.anchor, selectionMenu(res.text))
+		// UIA 能给出选区矩形时就用选区末尾当锚点，比鼠标抬起点准。
+		// 剪贴板法没有矩形，退回鼠标点。
+		anchor := res.anchor
+		if res.hasBounds {
+			anchor = point{res.bounds.Right, res.bounds.Bottom}
+			log.Printf("[capture] 使用选区矩形 %v 作为锚点", res.bounds)
+		}
+		queueMenu(anchor, selectionMenu(res.text))
 	})
 	// 必须在装有消费者之后才装钩子：captureCh 是无缓冲的，
 	// 采集 worker 若还没阻塞在接收上，第一个请求会被当成「忙」而丢弃。
