@@ -152,8 +152,21 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o nkb.test.exe .
 
 ## 已知限制
 
-1. **真控制台（cmd / PowerShell / Windows Terminal）里什么都不做** —— 不发 Ctrl+C（控制台里 Ctrl+C 是"中断"不是"复制"，会被透传给 shell 把用户正在跑的命令打断），也不用 MSAA 冒充（实测 MSAA 在那返回的是控制台窗口自身的名字/整块缓冲区，**不是选区**，弹一个内容不对的菜单比不弹更糟）。
-   **这不是实现遗漏**：有道的 binaries 里没有任何控制台 API，它的划词在真控制台里同样无效。要支持得走控制台自己的 `AttachConsole` + `GetConsoleSelectionInfo` + `ReadConsoleOutputCharacterW`，尚未实现。
+1. ~~真控制台里什么都不做~~ → **已解决（走 UIA，不是剪贴板）**
+
+   实测日志（在 Windows Terminal 里跑 `ping -t` 然后划选它的输出）：
+
+   ```
+   drag @(1494,794)  →  来源=uia  17 字  "字节=32 时间<1ms TTL="   耗时 64ms
+   ```
+
+   关键点：**UIA 是只读的**——它不发合成输入、不碰剪贴板，所以「打断用户正在跑的命令」
+   这个风险根本不存在，在控制台里试它代价为零。而 MSAA 不行（`accValue` 给的是
+   整块缓冲区，实测弹出过内容不对的菜单），剪贴板法更不行（Ctrl+C 在那等于中断）。
+
+   **剪贴板法在控制台里仍然禁用**，这条不变。判定交给 `GetSupportedTextSelection`：
+   provider 说自己不支持选区就放弃，不会弹错内容。
+
 2. **只认鼠标划词**，不认键盘选区（Shift+方向键、Ctrl+A）。
 3. **剪贴板法有副作用**：会给源程序发一次真实的复制事件，可能进入它的复制历史。参数是编译期常量（`capture.go` 顶部 `selectionSettleMS` / `clipboardWaitMS` / `dedupeWindowMS`），**目前没有暴露成命令行参数**。
 4. **剪贴板还原不是全格式覆盖**：非 HGLOBAL 的格式（`CF_PALETTE` / `CF_ENHMETAFILE` / `CF_OWNERDISPLAY` 等）和单格式超过 32MB 的内容不会被快照，还原时**会丢**。`CF_BITMAP` / `CF_DIB` / `CF_HDROP`（复制的文件）/ 注册格式（HTML / RTF）在内。

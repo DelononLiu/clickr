@@ -287,6 +287,13 @@ func uiaSelectionFromElement(el comPtr) (uiaResult, error) {
 	}
 	defer tp.release()
 
+	// 先问 provider「你支持选区吗」。
+	// 有的 provider 返回 SupportedTextSelection_None(0)，这时 GetSelection
+	// 的结果没有意义 —— 宁可不用，也别弹一个内容不对的菜单。
+	if sup, ok := supportedTextSelection(tp); ok && sup == supportedSelectionNone {
+		return uiaResult{}, ErrUnsupported
+	}
+
 	var arr uintptr
 	hr, _, _ := syscall.SyscallN(comVtblMethod(tp, textPatternGetSelection),
 		uintptr(tp), uintptr(unsafe.Pointer(&arr)))
@@ -332,6 +339,24 @@ func uiaSelectionFromElement(el comPtr) (uiaResult, error) {
 		res.bounds, res.hasBounds = b, true
 	}
 	return res, nil
+}
+
+// SupportedTextSelection 枚举
+const (
+	supportedSelectionNone     = 0
+	supportedSelectionSingle   = 1
+	supportedSelectionMultiple = 2
+)
+
+// supportedTextSelection 问 provider 支持哪种选区（0=None 1=Single 2=Multiple）。
+func supportedTextSelection(tp comPtr) (int32, bool) {
+	var sup int32
+	hr, _, _ := syscall.SyscallN(comVtblMethod(tp, textPatternGetSupportedSelection),
+		uintptr(tp), uintptr(unsafe.Pointer(&sup)))
+	if int32(hr) < 0 {
+		return 0, false
+	}
+	return sup, true
 }
 
 // textRangeRects 取选区矩形列表（每 4 个 double 一组：left, top, width, height）。
@@ -428,9 +453,19 @@ type uiaSource struct{}
 
 func (uiaSource) Name() sourceID { return sourceUIA }
 
-// Available：真控制台上 UIA 也读不到选区（那里的文本在控制台缓冲区里，
-// 要用控制台自己的 API），所以和别的源一样判为不可用。
-func (uiaSource) Available(c captureContext) bool { return !c.IsConsole }
+// Available：**总是可用，包括真控制台。**
+//
+// 和另外两个源不同，UIA 是**只读**的：它不发合成输入、不碰剪贴板，
+// 所以「打断用户正在跑的命令」那个风险不存在，试一下的代价是零。
+//
+// Windows Terminal 和 conhost 都有自己的 UIA provider（屏幕阅读器就靠它读终端），
+// 而 UIA 有真正的 TextPattern::GetSelection —— 与 MSAA 的 accValue
+// （「这个元素的值」，也就是整块缓冲区）有本质区别。
+// 所以控制台里它有可能给出真正的选区，值得一试。
+//
+// 判定交给 GetSupportedTextSelection：provider 说自己不支持选区时直接放弃，
+// 免得又弹出内容不对的菜单（那个坑在 MSAA 上踩过）。
+func (uiaSource) Available(captureContext) bool { return true }
 
 func (uiaSource) Read(_ captureContext, at point) (selection, error) {
 	r, err := uiaSelectionAt(at)

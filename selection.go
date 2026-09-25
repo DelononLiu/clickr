@@ -145,11 +145,12 @@ func (p *capturePipeline) ReadIn(c captureContext, at point) (selection, error) 
 		return selection{}, ErrUnsupported
 	}
 
-	// 所有 source 都因为 Available=false 被跳过（当前只可能发生在真控制台）
+	// 走到这里说明所有可用的 source 都试过了、都没结果。
+	// 真控制台是唯一会「部分源直接不可用」的环境，单独解释一句。
 	if c.IsConsole {
-		log.Printf("[capture] 前台是控制台窗口（class=%q），所有取文手段都不可用："+
-			"不发 Ctrl+C 以免打断你的命令；MSAA 在那返回的是窗口自身信息而非选区。"+
-			"读真控制台的选区需要控制台 API，尚未实现", c.ForegroundClass)
+		log.Printf("[capture] 前台是控制台窗口（class=%q），没取到选区："+
+			"剪贴板法被禁用（Ctrl+C 在那会打断你的命令），MSAA 也不可用"+
+			"（它返回的是窗口自身信息而非选区）。UIA 已试过。", c.ForegroundClass)
 	}
 	return selection{}, ErrUnsupported
 }

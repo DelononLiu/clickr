@@ -846,8 +846,9 @@ func TestClipboardSourceRefusesInConsole(t *testing.T) {
 	}
 	// 普通窗口里两者都应该可用
 	normal := captureContext{ForegroundClass: "Chrome_WidgetWin_1"}
-	if !(clipboardSource{}).Available(normal) || !(msaaSource{}).Available(normal) {
-		t.Error("普通窗口里两个源都应可用")
+	if !(clipboardSource{}).Available(normal) || !(msaaSource{}).Available(normal) ||
+		!(uiaSource{}).Available(normal) {
+		t.Error("普通窗口里三个源都应可用")
 	}
 }
 
@@ -901,8 +902,8 @@ func TestPipelineCarriesBoundsThrough(t *testing.T) {
 // 生产用的默认 pipeline：顺序就是优先级，剪贴板必须排在 MSAA 前面。
 func TestDefaultPipelineOrder(t *testing.T) {
 	src := capturePipelineDefault.sources
-	if len(src) < 2 {
-		t.Fatalf("默认 pipeline 至少要有两个源，实际 %d 个", len(src))
+	if len(src) < 3 {
+		t.Fatalf("默认 pipeline 至少要有三个源，实际 %d 个", len(src))
 	}
 	if src[0].Name() != sourceClipboard {
 		t.Errorf("第一个源必须是剪贴板（只有它能拿到用户真正拖选的那一段），实际 %q", src[0].Name())
