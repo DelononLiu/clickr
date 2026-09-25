@@ -512,7 +512,22 @@ func recreateSurfaces() {
 
 // ================================================================ 窗口过程
 
-func wndProc(hwnd uintptr, message uint32, wparam, lparam uintptr) uintptr {
+// wndProc 是所有窗口消息的入口。
+//
+// 外面的 recover 是必须的：这个函数由 Go 以 C 回调的形式被 Windows 调用，
+// 一旦 panic 冒泡出去，Go 运行时**无法把 panic 交回 C 调用者**，
+// 进程会直接静默死掉（没有日志、没有报错框），排查时毫无线索。
+func wndProc(hwnd uintptr, message uint32, wparam, lparam uintptr) (ret uintptr) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[wndproc] 处理消息 %#x 时 panic: %v", message, r)
+			ret = 0
+		}
+	}()
+	return wndProcImpl(hwnd, message, wparam, lparam)
+}
+
+func wndProcImpl(hwnd uintptr, message uint32, wparam, lparam uintptr) uintptr {
 	switch message {
 	case wmNCHitTest:
 		x := int32(int16(lparam & 0xFFFF))

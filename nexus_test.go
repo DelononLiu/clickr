@@ -11,6 +11,7 @@ package main
 import (
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -293,19 +294,43 @@ func TestDefaultBallPosIsInsideWorkArea(t *testing.T) {
 	}
 }
 
-// 菜单窗口必须比卡片大出投影扩散距离，否则阴影会被窗口边界切出直边。
-func TestWindowPadCoversShadow(t *testing.T) {
+// 阴影不能被窗口边界切出直边。
+//
+// 这个测试以前是恒真的（`pad` 就是 `shadowReach()` 本身，断言 pad >= shadowReach 永远成立），
+// 等于摆设。真正该验的是**渲染结果**：窗口最外一圈的 alpha 必须接近 0，
+// 否则说明留白不够、阴影被裁，视觉上会看到一条硬边（这个 bug 真出现过）。
+func TestShadowIsNotClippedAtWindowEdge(t *testing.T) {
 	scale = 1.0
-	for _, c := range []struct {
-		name          string
-		pad, blur, dy float64
-	}{
-		{"菜单", menuShadowPad(), menuShadowBlur, menuShadowDY},
-		{"悬浮球", ballShadowPad(), ballShadowBlur, ballShadowDY},
-	} {
-		if c.pad < shadowReach(c.blur, c.dy) {
-			t.Errorf("%s: 留白 %.1f 小于投影扩散距离 %.1f", c.name, c.pad, shadowReach(c.blur, c.dy))
+	menuModel_ = menuModel{items: []menuItem{
+		{title: "复制", shortcut: "Ctrl+C", icon: iconCopy},
+		{title: "搜索", icon: iconSearch},
+		{title: "翻译", icon: iconTranslate},
+	}}
+	menuHover = -1
+	w, h := menuWindowSize(3)
+	menuSurf = newSurface(w, h)
+	renderMenu()
+	s := menuSurf
+
+	maxEdgeAlpha := uint8(0)
+	scan := func(x, y int32) {
+		if a := s.bits[(y*s.w+x)*4+3]; a > maxEdgeAlpha {
+			maxEdgeAlpha = a
 		}
+	}
+	for x := int32(0); x < w; x++ {
+		scan(x, 0)
+		scan(x, h-1)
+	}
+	for y := int32(0); y < h; y++ {
+		scan(0, y)
+		scan(w-1, y)
+	}
+	// 最外圈允许有极淡的残余，但绝不该出现明显可见的 alpha
+	if maxEdgeAlpha > 16 {
+		t.Errorf("窗口最外圈 alpha 最高 %d（>16），说明投影被窗口边界裁切、"+
+			"会看到一条硬边。检查 shadowReach 与 scaled(menuShadowPad()) 的取值",
+			maxEdgeAlpha)
 	}
 }
 
@@ -635,6 +660,9 @@ func TestMSAAVtableSlotsLookSane(t *testing.T) {
 	defer a.release()
 	defer child.clear()
 
+	// 说明：这条只能证明「取到的地址是真实可执行代码」，**证明不了槽位顺序正确** ——
+	// 顺序整体错一位时，六个地址依然互不相同、依然都可执行。
+	// 真正守顺序的是端到端那条 TestMSAAReadsTextFromRealControl（它必须读出正确文本）。
 	seen := map[uintptr]int{}
 	slots := []int{vtblRelease, int(accGetAccName), int(accGetAccValue),
 		int(accGetAccRole), int(accGetAccState), accAccLocation}
@@ -642,10 +670,95 @@ func TestMSAAVtableSlotsLookSane(t *testing.T) {
 		addr := comVtblMethod(a, slot)
 		if addr == 0 {
 			t.Errorf("槽位 %d 的函数地址为 0", slot)
+			continue
+		}
+		if !isExecutableAddress(addr) {
+			t.Errorf("槽位 %d 的地址 %#x 不在可执行内存里，vtable 解引用可能越界", slot, addr)
 		}
 		if prev, dup := seen[addr]; dup {
 			t.Errorf("槽位 %d 与槽位 %d 指向同一地址 %#x", slot, prev, addr)
 		}
 		seen[addr] = slot
+	}
+}
+
+// ---------------------------------------------------------------- 采集服务
+
+// 回归测试：采集服务的「忙碌判据」曾经用 atomic.Bool 表达，
+// 零值是 false，而判据写成 CompareAndSwap(true, false)（要求当前为 true），
+// 于是**第一次采集就被跳过、之后每一次都被跳过** —— 整个程序的取词功能全废，
+// 而界面上只会静默地不弹菜单。
+//
+// 这个测试断言「第一个请求必须被处理」，那条 bug 会被当场抓住。
+func TestCaptureServiceHandlesFirstRequest(t *testing.T) {
+	var calls atomic.Int32
+	svc := newCaptureService(
+		func(captureRequest) captureResult {
+			calls.Add(1)
+			return captureResult{ok: true, text: "第一个请求的文本", method: "fake"}
+		},
+		func(captureResult) {},
+	)
+	svc.start()
+	time.Sleep(60 * time.Millisecond) // 等 worker 阻塞在 channel 接收上
+
+	res, got := svc.submit(captureRequest{how: "test"}, 500*time.Millisecond)
+	if !got {
+		t.Fatal("第一个请求就被跳过了 —— 忙碌判据写错了（这正是 captureIdle 那个 bug 的症状）")
+	}
+	if !res.ok || res.text != "第一个请求的文本" {
+		t.Errorf("结果不对: ok=%v text=%q", res.ok, res.text)
+	}
+	if n := calls.Load(); n != 1 {
+		t.Errorf("worker 被调用 %d 次，期望 1 次", n)
+	}
+}
+
+// 采集线程正忙（模拟卡在某个程序的延迟渲染上）时，新请求必须被**立刻丢弃**，
+// 而不是排队 —— 排队没有意义（等它腾出手用户早选了别的），
+// 更要紧的是绝不能出现两次采集并发操作同一个剪贴板。
+func TestCaptureServiceDropsWhenBusy(t *testing.T) {
+	var block atomic.Bool
+	release := make(chan struct{})
+	var calls atomic.Int32
+
+	svc := newCaptureService(
+		func(captureRequest) captureResult {
+			calls.Add(1)
+			if block.Load() {
+				<-release
+			}
+			return captureResult{ok: true, text: "T", method: "fake"}
+		},
+		func(captureResult) {},
+	)
+	svc.start()
+	time.Sleep(60 * time.Millisecond)
+
+	block.Store(true)
+	// 这条会卡在 work 里，所以放后台跑
+	go func() { _, _ = svc.submit(captureRequest{how: "blocking"}, 200*time.Millisecond) }()
+
+	// 等 worker 真的进入阻塞态
+	deadline := time.Now().Add(1 * time.Second)
+	for calls.Load() < 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if calls.Load() < 1 {
+		close(release)
+		t.Fatal("worker 没有开始处理请求")
+	}
+
+	if _, ok := svc.submit(captureRequest{how: "while-busy"}, 150*time.Millisecond); ok {
+		close(release)
+		t.Error("采集线程忙时不应接受新请求（会导致两次采集并发操作剪贴板）")
+	}
+
+	close(release)
+	// 放开之后应当恢复接活
+	block.Store(false)
+	time.Sleep(150 * time.Millisecond)
+	if _, ok := svc.submit(captureRequest{how: "after"}, 500*time.Millisecond); !ok {
+		t.Error("采集线程空闲后应当能继续接活")
 	}
 }

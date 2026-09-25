@@ -61,7 +61,11 @@ func newSurface(w, h int32) *surface {
 	var bits unsafe.Pointer
 	hbmp, _, _ := pCreateDIBSection.Call(hdc, uintptr(unsafe.Pointer(&bmi)),
 		dibRGBColors, uintptr(unsafe.Pointer(&bits)), 0, 0)
-	if hbmp == 0 {
+	if hbmp == 0 || hdc == 0 {
+		// 以前这里直接 panic。而这个函数在 WndProc 调用链上，
+		// Go 的 panic 无法抛回 C 调用者 —— 结果是**进程无声退出**，无任何线索。
+		// 现在先记日志再抛，配合 wndProc 的 recover，至少留下现场。
+		log.Printf("[render] 创建 DIB 表面失败 w=%d h=%d hdc=%#x", w, h, hdc)
 		panic("CreateDIBSection failed")
 	}
 	old, _, _ := pSelectObject.Call(hdc, hbmp)
@@ -76,7 +80,7 @@ func newSurface(w, h int32) *surface {
 }
 
 func (s *surface) free() {
-	if s.hdc == 0 {
+	if s.hbmp == 0 && s.hdc == 0 {
 		return
 	}
 	pSelectObject.Call(s.hdc, s.old)
@@ -385,6 +389,10 @@ func textMask(text string, maxW, lineH int32, hf uintptr) *glyphMask {
 		uintptr(unsafe.Pointer(&utf16[0])), uintptr(len(utf16)-1),
 		uintptr(unsafe.Pointer(&r)),
 		dtLeft|dtVCenter|dtSingleLine|dtNoPrefix|dtEndEllipsis)
+
+	// 读 DIB 的像素之前必须 GdiFlush：GDI 对 DIB 的绘制是按线程批处理的，
+	// 不 flush 就去读 bits 属于未定义行为（现在靠"恰好写穿"活着）。
+	pGdiFlush.Call()
 
 	m := &glyphMask{w: maxW, h: lineH, cov: make([]byte, int(maxW)*int(lineH))}
 	for i := 0; i < len(m.cov); i++ {

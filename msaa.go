@@ -144,14 +144,17 @@ func (p comPtr) accString(slot accStringSlot, child *variant) (string, bool) {
 // accInt 调 get_accRole / get_accState 这类返回 VARIANT(int) 的方法。
 func (p comPtr) accInt(slot accIntSlot, child *variant) (int32, bool) {
 	var out variant
+	// defer 必须放在 hr 判断**之前**：失败时 provider 仍可能往 out 里写了
+	// 东西（BSTR / IDispatch），提前 return 会漏掉 VariantClear，泄漏。
+	// defer 是栈式的，放在这里对成功路径同样成立。
 	hr, _, _ := syscall.SyscallN(comVtblMethod(p, int(slot)),
 		uintptr(p),
 		uintptr(unsafe.Pointer(child)),
 		uintptr(unsafe.Pointer(&out)))
+	defer out.clear()
 	if int32(hr) < 0 {
 		return 0, false
 	}
-	defer out.clear()
 	if out.VT != vtI4 {
 		return 0, false
 	}

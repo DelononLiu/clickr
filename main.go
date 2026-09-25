@@ -27,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 	"unsafe"
 )
 
@@ -36,6 +37,9 @@ import (
 // 却把旧的 NexusKB.exe 部署了出去，用户测的全程是旧版。
 // 有了构建戳就能直接从日志/`-version` 确认跑的是哪个版本。
 var buildStamp = "dev"
+
+// captureSvc 由 main 装配；测试各自 new 一个实例，互不干扰
+var captureSvc *captureService
 
 func main() {
 	// 主线程必须锁死：Win32 窗口的消息只会派发到创建它的那个线程，
@@ -50,12 +54,35 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("NexusKB build=%s\n", buildStamp)
+		// 发布版（-H=windowsgui）没有 stdout，只 Printf 等于什么都不会出现 ——
+		// 而 `-version` 恰恰是确认「跑的是哪个版本」的手段。
+		// 所以再写一份到日志文件。
+		//
+		// 这里**不用** MessageBox：它会阻塞等用户点确定，
+		// 在被脚本/管道调用时会把调用方一起挂死（真踩过）。
+		msg := "NexusKB build=" + buildStamp
+		fmt.Println(msg)
+		writeCrashLog(msg)
 		return
 	}
 
 	setupLogging(*verbose)
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
+
+	// ---- 0) 先把 DLL 搜索路径收紧到 System32 ----
+	//
+	// syscall.NewLazyDLL 只对 kernel32/advapi32/shell32 做 System32 钉死，
+	// 其余（user32/gdi32/ole32/oleaut32/**oleacc**/shcore）走标准搜索顺序，
+	// 也就是**应用目录优先** —— 只要有人往 NexusKB.exe 同目录放一个 oleacc.dll，
+	// 就会被我们加载并调用。
+	//
+	// 这个 exe 就放在用户可写的目录里，所以这是真实的本地提权面。
+	// 必须在加载任何 DLL 之前调用（NewLazyDLL 本身不加载，首次 Call 才加载）。
+	if r, _, err := pSetDefaultDllDirectories.Call(loadLibrarySearchSystem32); r == 0 {
+		log.Printf("[init] SetDefaultDllDirectories 失败（DLL 搜索路径未能收紧）: %v", err)
+	} else {
+		log.Printf("[init] DLL 搜索路径已收紧为仅 System32")
+	}
 
 	// ---- 1) DPI 感知：必须在创建任何窗口之前设置 ----
 	aware := setDPIAwareness()
@@ -101,22 +128,27 @@ func main() {
 	}
 
 	// ---- 5) 采集线程 ----
-	startCaptureWorker(func(res captureResult) {
+	captureSvc = newCaptureService(captureSelection, func(res captureResult) {
 		setLastSelection(res.text)
 		log.Printf("[capture] 取到 %d 字（%s，耗时 %v）: %.40q",
 			len([]rune(res.text)), res.method, res.elapsed.Round(1e6), res.text)
 		queueMenu(res.anchor, selectionMenu(res.text))
 	})
+	// 必须在装有消费者之后才装钩子：captureCh 是无缓冲的，
+	// 采集 worker 若还没阻塞在接收上，第一个请求会被当成「忙」而丢弃。
+	// 也就是说这两步的**顺序是有承载作用的**，别调换。
+	captureSvc.start()
 
 	// ---- 6) 装全局鼠标钩子 ----
 	err := startMouseHook(
 		func(anchor point, how string) {
 			log.Printf("[hook] 识别到划词动作: %s @(%d,%d)", how, anchor.X, anchor.Y)
-			select {
-			case captureCh <- captureRequest{anchor: anchor, how: how}:
-			default:
-				log.Printf("[capture] 队列已满，丢弃本次")
-			}
+			req := captureRequest{anchor: anchor, how: how}
+			go func() {
+				if _, ok := captureSvc.submit(req, captureTimeoutMS*time.Millisecond); !ok {
+					log.Printf("[capture] 采集线程忙或超时，本次请求未完成（%s）", how)
+				}
+			}()
 		},
 		hideMenuIfOutside,
 	)
@@ -214,30 +246,22 @@ func runSelfTest() {
 
 // setupLogging 安排日志去向。
 //
-// 开发用控制台版能直接在终端看；发布用 -H=windowsgui 没有控制台，
-// 所以 -debug 时同时写一份到文件，方便排查「双击没反应」。
+// **默认就写文件**，`-debug` 只是额外加一份到 stderr。
+//
+// 早先默认是 io.Discard（什么都不写），理由是"正常用户不需要日志"。但结果是：
+// 「没取到文本」「剪贴板还原失败、你的剪贴板内容已丢」这些故障对用户
+// **完全不可见** —— 而 GUI 用户根本不会带 -debug 重启。
 func setupLogging(verbose bool) {
-	if !verbose {
-		log.SetOutput(io.Discard)
-		return
-	}
 	// 顺序有讲究：文件放前面。
 	//
-	// io.MultiWriter 遇到第一个报错的 writer 就会立刻返回，**后面的不再写**。
-	// GUI 子系统（-H=windowsgui）被 detached 启动时没有控制台，
-	// os.Stderr 是个无效句柄、写入必失败 —— 如果 stderr 排在前面，
-	// 日志文件就永远拿不到任何内容（实测踩过）。
+	// io.MultiWriter 遇到第一个报错的 writer 就立刻返回、**后面的不再写**。
+	// GUI 子系统被 detached 启动时没有控制台，os.Stderr 是无效句柄、写入必失败；
+	// 如果 stderr 排在前面，日志文件就永远拿不到任何内容（实测踩过）。
 	writers := []io.Writer{}
-	if dir, err := os.UserCacheDir(); err == nil && dir != "" {
-		dir = filepath.Join(dir, "NexusKB")
-		if os.MkdirAll(dir, 0o755) == nil {
-			if f, err := os.OpenFile(filepath.Join(dir, "nexuskb.log"),
-				os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
-				writers = append(writers, f)
-			}
-		}
+	if f := openLogFile(); f != nil {
+		writers = append(writers, f)
 	}
-	if hasConsole() {
+	if verbose && hasConsole() {
 		writers = append(writers, os.Stderr)
 	}
 	if len(writers) == 0 {
@@ -246,10 +270,56 @@ func setupLogging(verbose bool) {
 	log.SetOutput(io.MultiWriter(writers...))
 }
 
+// maxLogBytes 超过就把旧日志轮转一次，避免无上限增长。
+const maxLogBytes = 1 << 20
+
+func logFilePath() string {
+	dir, err := os.UserCacheDir()
+	if err != nil || dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "NexusKB", "nexuskb.log")
+}
+
+func openLogFile() *os.File {
+	path := logFilePath()
+	if path == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil
+	}
+	if st, err := os.Stat(path); err == nil && st.Size() > maxLogBytes {
+		_ = os.Rename(path, path+".1") // 轮转失败也无所谓，继续追加
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return nil
+	}
+	return f
+}
+
+// writeCrashLog 无条件往日志文件追加一行，不依赖当前 log 的输出目标。
+func writeCrashLog(line string) {
+	f := openLogFile()
+	if f == nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%s\n", line)
+}
+
 // fatal 记录并弹框后退出。GUI 子系统下这是唯一能让用户看到错误的方式。
 func fatal(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
+	// 无条件写一份到日志文件：此时日志可能被重定向到任何地方，
+	// 而「为什么没起来」恰恰是事后最需要留下的信息。
+	if f := openLogFile(); f != nil {
+		fmt.Fprintf(f, "[fatal] %s\n", msg)
+		f.Close()
+	}
 	log.Printf("[fatal] %s", msg)
-	messageBox("NexusKB 启动失败", msg, mbOK|mbIconError)
+	// owner 传悬浮球窗口：传 0 的话这个框会被我们自己的 topmost 悬浮球盖住
+	messageBoxOwned(hwndBall, "NexusKB 启动失败", msg, mbOK|mbIconError|mbTopmost|mbSetForeground)
 	os.Exit(1)
 }

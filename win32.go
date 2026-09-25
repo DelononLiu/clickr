@@ -33,6 +33,8 @@ var (
 	pGetModuleHandleW              = kernel32.NewProc("GetModuleHandleW")
 	pGetCurrentProcessId           = kernel32.NewProc("GetCurrentProcessId")
 	pGetConsoleWindow              = kernel32.NewProc("GetConsoleWindow")
+	pSetDefaultDllDirectories      = kernel32.NewProc("SetDefaultDllDirectories")
+	pVirtualQuery                  = kernel32.NewProc("VirtualQuery")
 	pGetTickCount64                = kernel32.NewProc("GetTickCount64")
 	pSleep                         = kernel32.NewProc("Sleep")
 )
@@ -161,6 +163,7 @@ var (
 	pDeleteObject          = gdi32.NewProc("DeleteObject")
 	pCreateFontIndirectW   = gdi32.NewProc("CreateFontIndirectW")
 	pGetTextExtentPoint32W = gdi32.NewProc("GetTextExtentPoint32W")
+	pGdiFlush              = gdi32.NewProc("GdiFlush")
 	pSetBkMode             = gdi32.NewProc("SetBkMode")
 	pSetTextColor          = gdi32.NewProc("SetTextColor")
 	pCreateSolidBrush      = gdi32.NewProc("CreateSolidBrush")
@@ -282,6 +285,12 @@ const (
 	idcHand    = 32649
 	idcSizeAll = 32646
 
+	// 系统度量：拖动判定矩形 / 双击判定矩形（都是 DPI 相关的）
+	smCXDOUBLECLK = 36
+	smCYDOUBLECLK = 37
+	smCXDRAG      = 68
+	smCYDRAG      = 69
+
 	// TrackMouseEvent
 	tmeLeave = 0x00000002
 
@@ -291,8 +300,20 @@ const (
 	consoNoSelection    = 0x0000
 
 	// MessageBox
-	mbOK        = 0x00000000
-	mbIconError = 0x00000010
+	mbOK            = 0x00000000
+	mbIconError     = 0x00000010
+	mbTopmost       = 0x00040000
+	mbSetForeground = 0x00010000
+
+	// SetDefaultDllDirectories：只从 System32 找 DLL
+	loadLibrarySearchSystem32 = 0x00000800
+
+	// VirtualQuery / MEMORY_BASIC_INFORMATION
+	memCommit            = 0x1000
+	pageExecute          = 0x10
+	pageExecuteRead      = 0x20
+	pageExecuteReadWrite = 0x40
+	pageExecuteWriteCopy = 0x80
 
 	// ShellExecute
 	swHide       = 0

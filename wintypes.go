@@ -276,6 +276,40 @@ type smallRect struct {
 	Bottom int16
 }
 
+// MEMORY_BASIC_INFORMATION（x64，共 48 字节）。
+//
+//	BaseAddress@0 AllocationBase@8 AllocationProtect@16
+//	(PartitionId@20) RegionSize@24 State@32 Protect@36 Type@40
+type memoryBasicInformation struct {
+	BaseAddress       uintptr
+	AllocationBase    uintptr
+	AllocationProtect uint32
+	_                 uint32
+	RegionSize        uintptr
+	State             uint32
+	Protect           uint32
+	Type              uint32
+	_                 uint32
+}
+
+// isExecutableAddress 判断某个地址是否落在已提交且可执行的内存页里。
+//
+// 用来给「从 COM vtable 里取出来的函数指针」做一层廉价体检：
+// 如果槽位索引越界、指到了数据区，这里会判 false。
+func isExecutableAddress(addr uintptr) bool {
+	var mbi memoryBasicInformation
+	n, _, _ := pVirtualQuery.Call(addr, uintptr(unsafe.Pointer(&mbi)),
+		unsafe.Sizeof(mbi))
+	if n == 0 || mbi.State != memCommit {
+		return false
+	}
+	switch mbi.Protect {
+	case pageExecute, pageExecuteRead, pageExecuteReadWrite, pageExecuteWriteCopy:
+		return true
+	}
+	return false
+}
+
 // hasConsole 判断进程有没有可写的控制台。
 //
 // 用 GetConsoleWindow 而不是 GetStdHandle：被 detached 启动时
@@ -377,12 +411,40 @@ func sendKey(vk uint16, up bool) {
 // 关键点：用户在划词时很可能正按着 Shift（或者别的方式），
 // 这里额外补发一次 Ctrl 抬起，避免修饰键状态被我们搞乱。
 func sendCtrlC() {
+	// 关键：只有**我们自己按下**的 Ctrl 才由我们抬起。
+	//
+	// 用户很可能正按着 Ctrl 在别处操作；无条件补一次「抬起」会把他的 Ctrl
+	// 松开（修饰键状态错乱）。之前的条件只挡住了「按下」，没挡住「抬起」。
+	wePressedCtrl := false
 	if !isKeyDown(vkControl) {
 		sendKey(vkControl, false)
+		wePressedCtrl = true
 	}
 	sendKey(vkC, false)
 	sendKey(vkC, true)
-	sendKey(vkControl, true)
+	if wePressedCtrl {
+		sendKey(vkControl, true)
+	}
+}
+
+// dragThreshold 返回「算拖选而不算单击」的位移阈值。
+//
+// 用系统的 SM_CXDRAG / SM_CYDRAG，而不是写死 5px：
+// 这两个值的语义就是「拖动判定矩形」，而且**系统已经按 DPI 缩放过**。
+// 写死的话，200% 缩放下的 5 物理像素只等效 2.5 逻辑像素，手一抖就被当成划词。
+func dragThreshold() (int32, int32) { return systemMetric(smCXDRAG), systemMetric(smCYDRAG) }
+
+// doubleClickProximity 返回双击允许的位置偏差，同样取系统值（已按 DPI 缩放）。
+func doubleClickProximity() (int32, int32) {
+	return systemMetric(smCXDOUBLECLK), systemMetric(smCYDOUBLECLK)
+}
+
+func systemMetric(idx int32) int32 {
+	v, _, _ := pGetSystemMetrics.Call(uintptr(idx))
+	if v == 0 {
+		return 4 // 拿不到就给个保守默认，别变成 0（否则任何位移都算拖选）
+	}
+	return int32(v)
 }
 
 // utf16Ptr 把 Go 字符串转成以 NUL 结尾的 UTF-16 指针。
@@ -399,7 +461,13 @@ func utf16Ptr(s string) *uint16 {
 // GUI 子系统（-H=windowsgui）编译出来的程序没有控制台，
 // 初始化失败时如果只写 log 就等于静默退出，用户完全不知道发生了什么。
 func messageBox(title, text string, flags uintptr) {
-	pMessageBoxW.Call(0,
+	messageBoxOwned(0, title, text, flags)
+}
+
+// messageBoxOwned 指定属主窗口。传 0 的话，这个框可能被我们自己
+// 那个 WS_EX_TOPMOST 的悬浮球盖住 —— 用户就永远看不到错误提示。
+func messageBoxOwned(owner uintptr, title, text string, flags uintptr) {
+	pMessageBoxW.Call(owner,
 		uintptr(unsafe.Pointer(utf16Ptr(text))),
 		uintptr(unsafe.Pointer(utf16Ptr(title))),
 		flags)

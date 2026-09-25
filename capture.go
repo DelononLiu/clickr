@@ -30,7 +30,6 @@ import (
 	"log"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -57,13 +56,47 @@ const (
 type captureRequest struct {
 	anchor point
 	how    string
+	reply  chan captureResult // 采集线程把结果送回这里
 }
 
-var captureCh = make(chan captureRequest, 4)
+// captureService 是常驻采集线程的持有者。
+//
+// 做成**实例**而不是包级全局，原因有二：
+//  1. 全局状态让测试无法隔离 —— 两个测试各自 start 一次就会有两个 worker
+//     抢同一个 channel，行为随测试顺序变化（真踩过）；
+//  2. 去重窗口（lastText/lastTextTime）本来就属于「采集」这件事的状态，
+//     挂在包级 var 上等于又一次把所有权藏起来。
+type captureService struct {
+	work func(captureRequest) captureResult
+	cb   func(captureResult)
 
-// captureIdle 保证同一时刻只有一次采集在操作剪贴板。
-// 超时被放弃的那次仍可能在后台跑完，所以用「不并发」而不是「加锁」来防交叉。
-var captureIdle atomic.Bool
+	// ch **无缓冲**，这是刻意的，不要改成带缓冲。
+	//
+	// 无缓冲 channel 的发送只有在接收方正阻塞等待时才会成功 ——
+	// 于是 `select { case ch <- req: default: }` 天然就是
+	// 「采集线程现在空闲吗？」的原子判据，不需要任何额外的标志位。
+	//
+	// 曾经用一个 `atomic.Bool` 表达这件事，结果零值是 false 而判据写成
+	// CompareAndSwap(true,false)（要求当前为 true），于是**首次采集就被跳过、
+	// 且此后永远跳过** —— 整个取词功能全废。用 channel 自身的语义就没有初值陷阱。
+	ch chan captureRequest
+
+	dedupeMu   sync.Mutex
+	lastText   string
+	lastTime   time.Time
+	dedupeSpan time.Duration
+}
+
+func newCaptureService(work func(captureRequest) captureResult, cb func(captureResult)) *captureService {
+	return &captureService{
+		work:       work,
+		cb:         cb,
+		ch:         make(chan captureRequest),
+		dedupeSpan: dedupeWindowMS * time.Millisecond,
+	}
+}
+
+// captureRequest / captureResult 见下。
 
 // ---------------------------------------------------------------- 结果
 
@@ -76,87 +109,72 @@ type captureResult struct {
 	elapsed time.Duration
 }
 
-var (
-	resultMu     sync.Mutex
-	lastText     string
-	lastTextTime time.Time
-)
-
-// startCaptureWorker 起一个常驻的采集线程，串行处理请求。
+// start 起常驻采集线程。
 //
-// 串行是刻意的：剪贴板是全局独占资源，并发采集只会互相抢锁。
-func startCaptureWorker(cb func(captureResult)) {
-	go func() {
-		for req := range captureCh {
-			res, done := captureWithTimeout(req)
-			if !done {
-				// 注意这里不能报成「未取到文本」：那是「确实没有选区」，
-				// 而这是「读取失败」，两者对上层和用户的含义完全不同。
-				log.Printf("[capture] 本次采集整体超时或被跳过（>%dms 未收尾）。"+
-					"常见原因是某个程序声明了延迟渲染却一直不交出数据", captureTimeoutMS)
-				continue
-			}
-			if !res.ok {
-				log.Printf("[capture] 未取到文本（%s）", req.how)
-				continue
-			}
-			if isDuplicate(res.text) {
-				log.Printf("[capture] 与上次相同，忽略（%s）", req.how)
-				continue
-			}
-			cb(res)
-		}
-	}()
-}
-
-// captureWithTimeout 给单次采集套一个总超时。
+// 串行不是靠锁，而是靠「只有一个 goroutine 在消费」这个结构本身：
+// 剪贴板是全局独占资源，并发采集只会互相破坏。
 //
-// 剪贴板的读操作有可能**永久阻塞**：如果数据是延迟渲染的，而持有者迟迟不调用
-// SetClipboardData，GetClipboardData 就会一直等下去。没有这层保护，
-// 采集线程会被卡死，之后所有划词都毫无反应 —— 用户看到的就是「程序卡住了」。
-// 超时后那次采集的 goroutine 会泄漏（Win32 没有干净的中断手段），
-// 但主流程还能继续服务，比整体卡死好得多。
-func captureWithTimeout(req captureRequest) (captureResult, bool) {
-	// 上一次采集如果超时被放弃，它的 goroutine 并没有停下来 ——
-	// Win32 没有干净的中断手段，它可能正卡在 GetClipboardData 里，
-	// 也可能刚醒过来继续走「还原剪贴板」。
-	// 这时候再起一次采集，两次就会并发操作同一个全局独占的剪贴板，
-	// 互相把对方快照的内容写回去，甚至覆盖用户在这个窗口期内新复制的东西。
-	//
-	// 所以超时之后不再并发新采集，直接跳过本次请求。
-	if !captureIdle.CompareAndSwap(true, false) {
-		log.Printf("[capture] 上一次采集尚未收尾（可能已超时被放弃），跳过本次请求")
-		return captureResult{}, false
-	}
-	defer captureIdle.Store(true)
-
-	ch := make(chan captureResult, 1)
+// 常驻而不是每次新起 goroutine，是因为 COM/MSAA 按线程初始化：
+// 每请求新建线程就要 OleInitialize 一次，且线程回池后公寓一直挂着。
+// 这里锁死一个线程、初始化一次。
+func (c *captureService) start() {
 	go func() {
-		// COM/MSAA 是按线程初始化的，所以把这次采集锁死在一个线程上，
-		// 并在这里做 OleInitialize。重复初始化是幂等的（返回 S_FALSE）。
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 		if err := initMSAA(); err != nil {
 			log.Printf("[capture] OleInitialize 失败，MSAA 兜底不可用: %v", err)
 		}
-		ch <- captureSelection(req)
+		log.Printf("[capture] 采集线程就绪（常驻单线程，COM 已初始化）")
+		for req := range c.ch {
+			res := c.work(req)
+			if req.reply != nil {
+				req.reply <- res
+			}
+			if !res.ok {
+				log.Printf("[capture] 未取到文本（%s，method=%s）", req.how, res.method)
+				continue
+			}
+			if c.isDuplicate(res.text) {
+				log.Printf("[capture] 与上次相同，忽略（%s）", req.how)
+				continue
+			}
+			c.cb(res)
+		}
 	}()
+}
+
+// submit 提交一次采集请求并等结果。
+//
+// 返回的 bool 表示「拿到结果了」，与「取到文本了」是两件事 ——
+// 前者是流程状态，后者在 captureResult.ok 里。别把两者混成一个值。
+func (c *captureService) submit(req captureRequest, timeout time.Duration) (captureResult, bool) {
+	req.reply = make(chan captureResult, 1) // 带缓冲：调用方超时走了也不阻塞采集线程
+
 	select {
-	case r := <-ch:
+	case c.ch <- req:
+	default:
+		// 采集线程正忙（可能卡在某个程序的延迟渲染上），本次不排队。
+		// 排队没意义：等它腾出手用户早选了别的；
+		// 更要紧的是绝不能出现两次采集并发操作同一个剪贴板。
+		return captureResult{}, false
+	}
+
+	select {
+	case r := <-req.reply:
 		return r, true
-	case <-time.After(captureTimeoutMS * time.Millisecond):
+	case <-time.After(timeout):
 		return captureResult{}, false
 	}
 }
 
-func isDuplicate(text string) bool {
-	resultMu.Lock()
-	defer resultMu.Unlock()
+func (c *captureService) isDuplicate(text string) bool {
+	c.dedupeMu.Lock()
+	defer c.dedupeMu.Unlock()
 	now := time.Now()
-	if text == lastText && now.Sub(lastTextTime) < dedupeWindowMS*time.Millisecond {
+	if text == c.lastText && now.Sub(c.lastTime) < c.dedupeSpan {
 		return true
 	}
-	lastText, lastTextTime = text, now
+	c.lastText, c.lastTime = text, now
 	return false
 }
 
@@ -226,9 +244,13 @@ func captureSelection(req captureRequest) captureResult {
 	}
 
 	// 7) 还原用户原本的剪贴板
+	if len(snap.dropped) > 0 {
+		log.Printf("[capture] 警告：有 %d 个剪贴板格式无法快照（非 HGLOBAL 或超限），"+
+			"还原后这些格式会丢失: %v", len(snap.dropped), snap.dropped)
+	}
 	if !snap.restore() {
-		log.Printf("[capture] 剪贴板还原失败：用户原来的剪贴板内容已丢失（快照含 %d 个格式）",
-			len(snap.formats))
+		log.Printf("[capture] 剪贴板还原失败：用户原来的剪贴板内容已丢失"+
+			"（快照 ok=%v，含 %d 个格式）", snap.ok, len(snap.formats))
 	}
 
 	// 8) 剪贴板法失败时用 MSAA 兜底。
@@ -331,11 +353,18 @@ type clipFormat struct {
 	format  uint32
 	data    []byte
 	hObject uintptr
+	done    bool // 已经成功写回剪贴板，重试时跳过
 }
 
 type clipSnapshot struct {
 	formats []clipFormat
 	bytes   int
+	// ok 表示快照本身成功。必须和「剪贴板本来就是空的」区分开：
+	// 前者是「我们没保住用户的东西」，后者是「本来就没东西」。
+	ok bool
+	// dropped 是主动放弃、还原不回去的格式（非 HGLOBAL 那几类 + 超限的）。
+	// 静默丢弃等于骗用户「还原成功」。
+	dropped []uint32
 }
 
 // isGlobalHandleFormat 判断某个剪贴板格式的数据是不是 HGLOBAL。
@@ -364,8 +393,9 @@ func isGlobalHandleFormat(f uint32) bool {
 func snapshotClipboard() clipSnapshot {
 	var snap clipSnapshot
 	if !openClipboardWithRetry(12, 15*time.Millisecond) {
-		return snap
+		return snap // ok 保持 false：没快照成功，调用方不许声称还原成功
 	}
+	snap.ok = true
 	defer pCloseClipboard.Call()
 
 	for f := uint32(0); ; {
@@ -389,10 +419,12 @@ func snapshotClipboard() clipSnapshot {
 		}
 
 		if !isGlobalHandleFormat(f) {
+			snap.dropped = append(snap.dropped, f)
 			continue
 		}
 		sz, _, _ := pGlobalSize.Call(h)
 		if sz == 0 || sz > maxClipFormatBytes || snap.bytes+int(sz) > maxClipTotalBytes {
+			snap.dropped = append(snap.dropped, f)
 			continue
 		}
 		p, _, _ := pGlobalLock.Call(h)
@@ -413,14 +445,21 @@ func snapshotClipboard() clipSnapshot {
 //
 // 失败会重试几次：刚被我们 Ctrl+C 触发的那个程序可能还短暂占着剪贴板
 // （延迟渲染是异步的），这时 OpenClipboard / EmptyClipboard 会失败。
-func (s clipSnapshot) restore() bool {
+func (s *clipSnapshot) restore() bool {
+	if !s.ok {
+		// 快照都没成功，绝不能声称还原成功 —— 用户剪贴板里的东西已经没了
+		return false
+	}
 	if len(s.formats) == 0 {
-		// 原本剪贴板就是空的，没什么要还原的
+		// 快照成功且一个格式都没有 = 剪贴板本来就是空的，无需还原
 		return true
 	}
 	const attempts = 6
 	for i := 0; i < attempts; i++ {
-		if s.restoreOnce() {
+		// 只在第一轮清空剪贴板。
+		// 之前每轮都 EmptyClipboard：重试会把上一轮已经写回去的格式再抹掉，
+		// 而那些格式的 hObject 已被置 0 / data 不会再写，于是丢数据却报成功。
+		if s.restoreOnce(i == 0) {
 			return true
 		}
 		time.Sleep(time.Duration(30*(i+1)) * time.Millisecond)
@@ -428,27 +467,32 @@ func (s clipSnapshot) restore() bool {
 	return false
 }
 
-func (s clipSnapshot) restoreOnce() bool {
+func (s *clipSnapshot) restoreOnce(first bool) bool {
 	if !openClipboardWithRetry(8, 15*time.Millisecond) {
 		return false
 	}
 	defer pCloseClipboard.Call()
 
-	if r, _, _ := pEmptyClipboard.Call(); r == 0 {
-		return false
+	if first {
+		if r, _, _ := pEmptyClipboard.Call(); r == 0 {
+			return false
+		}
 	}
 	// 任何一个格式写失败都要如实返回 false，让上层重试并最终报错 ——
 	// 否则「部分格式丢失」会被静默当成还原成功。
 	allOK := true
 	for i := range s.formats {
 		c := &s.formats[i]
+		if c.done {
+			continue // 上一轮已经写回去了，别再动它
+		}
 		if c.hObject != 0 {
-			// CopyImage 出来的副本本来就是我们的，直接交给系统
+			// CopyImage 出来的副本本来就是我们的，交给系统后就不再是我们的
 			if r, _, _ := pSetClipboardData.Call(uintptr(c.format), c.hObject); r != 0 {
-				c.hObject = 0
-				continue
+				c.hObject, c.done = 0, true
+			} else {
+				allOK = false
 			}
-			allOK = false
 			continue
 		}
 		h, err := allocGlobalBytes(c.data)
@@ -459,13 +503,15 @@ func (s clipSnapshot) restoreOnce() bool {
 		if r, _, _ := pSetClipboardData.Call(uintptr(c.format), h); r == 0 {
 			pGlobalFree.Call(h) // 只有失败才需要自己释放
 			allOK = false
+		} else {
+			c.done = true
 		}
 	}
 	return allOK
 }
 
 // freeNotOwned 释放还原流程没有交出去、仍攥在手里的 GDI 对象副本，避免泄漏。
-func (s clipSnapshot) freeNotOwned() {
+func (s *clipSnapshot) freeNotOwned() {
 	for i := range s.formats {
 		if s.formats[i].hObject != 0 {
 			pDeleteObject.Call(s.formats[i].hObject)

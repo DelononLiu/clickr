@@ -213,6 +213,19 @@ type reporter interface {
 | `setDPIAwareness` 用 `== 0` 判 HRESULT（S_FALSE 也算成功） | 改 `int32(r) >= 0` |
 | 还原时部分格式失败却报成功 | `restoreOnce` 如实返回 `false` |
 | `msaaReady` 只写不读 | 删除（线程局部状态不该用包级变量表达） |
+| **采集被自己永久关停**：用 `atomic.Bool` 表达「忙不忙」，零值是 false 而判据是 `CompareAndSwap(true,false)` → 首次采集就被跳过、此后永远跳过 | 改用**常驻采集实例**；「空闲吗」由无缓冲 channel 自身的语义回答，没有初值陷阱。`TestCaptureServiceHandlesFirstRequest` 守着 |
+| 还原剪贴板每轮重试都 `EmptyClipboard` → 抹掉上一轮已还原的格式且不重写，却返回成功 | 只在首轮清空；每格式记 `done`；失败如实返回 |
+| 快照为空 = 成功（分不清「本来就没东西」和「快照失败」）；主动丢弃的格式不上报 | 加 `ok` 与 `dropped`，调用方如实记日志 |
+| `sendCtrlC` 无条件补发 Ctrl「抬起」→ **会把用户正按着的 Ctrl 松开** | 只抬起我们自己按下的 |
+| `accInt` 失败分支提前 return → 漏 `VariantClear`，泄漏 BSTR/IDispatch | `defer out.clear()` 提到 hr 判断之前 |
+| 拖动/双击阈值写死 5px / 4px（物理像素）→ 200% 缩放下等效 2.5 逻辑像素，手抖即误判 | 改取系统度量 `SM_CXDRAG`/`SM_CXDOUBLECLK`（系统已按 DPI 缩放） |
+| `syscall.NewLazyDLL` 对 user32/gdi32/ole32/oleaut32/**oleacc** 走标准搜索顺序 = **应用目录优先** → 同目录放个 `oleacc.dll` 就会被加载 | 启动时 `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)` |
+| `CreateDIBSection` 失败直接 panic，而它在 WndProc 调用链上 → panic 无法抛回 C，**进程无声退出** | panic 前记日志；WndProc 加 `recover` |
+| 日志默认 `io.Discard` → 采集失败/剪贴板丢失对用户完全不可见 | 默认写文件（>1MB 轮转），`-debug` 只额外加 stderr |
+| `fatal` 的原因进不了日志文件；`-version` 在 GUI 版无 stdout 打不出来 | `fatal` 无条件落盘；`-version` 同时写日志文件（**不用 MessageBox**：它会阻塞，被脚本调用时把调用方一起挂死） |
+| 读 DIB 像素前没有 `GdiFlush`（GDI 对 DIB 的绘制按线程批处理） | 加 `pGdiFlush` |
+| `TestWindowPadCoversShadow` 恒真（`pad` 就是 `shadowReach` 本身）；`TestMSAAVtableSlotsLookSane` 只验「六地址互不相同」，**顺序整体错一位照样通过** | 换成真的断言：窗口最外圈 alpha 必须接近 0（阴影没被裁）；vtable 地址必须落在**可执行内存**里（`VirtualQuery`）；并注明「守顺序的是端到端那条测试」 |
+| `TestForegroundConsoleDetectionDoesNotCrash` 断言体是 `_ = f()` | 类名表化 + `TestIsConsoleClass` 真断言 |
 
 ---
 
@@ -229,6 +242,16 @@ type reporter interface {
 **②③ 可以和第 ① 并行做**：② 只碰 `capture.go`/`msaa.go`，③ 是新增文件。
 
 ---
+
+## 一条方法上的教训（被验证了两次）
+
+第一轮修完竞争后我引入了一个**致命 bug**：用 `atomic.Bool` 表达采集线程「忙不忙」，零值是 `false` 而判据写成 `CompareAndSwap(true, false)`（要求当前值为 `true`）——
+首次采集即被跳过，此后每一次都被跳过。**整个取词功能全废**，而界面上只是"静默地不弹菜单"。
+
+它能上线的原因正是评审早就点明的那条：**`captureSelection` 主链路零覆盖**。
+修完之后补了 `TestCaptureServiceHandlesFirstRequest`——断言"第一个请求必须被处理"，这条 bug 会被当场抓住。
+
+**没有测试守着的关键路径，等于没有路径。**
 
 ## 一条方法上的教训
 

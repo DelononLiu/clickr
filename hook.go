@@ -15,7 +15,6 @@ package main
 
 import (
 	"runtime"
-	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -33,13 +32,11 @@ type hookEvent struct {
 }
 
 var (
-	hookCh   = make(chan hookEvent, 128)
-	hookOnce sync.Once
+	hookCh = make(chan hookEvent, 128)
 
-	// 拖动判定阈值：小于它就当成普通点击，不认为是划词
-	dragThresholdPx int32 = 5
-	// 双击判定：两次左键抬起间隔小于系统的双击时间、且位置接近
-	dblProximityPx int32 = 4
+	// 拖动/双击的判定阈值都取系统度量（已按 DPI 缩放），见 dragThreshold()。
+	// 曾经写死 5px / 4px：200% 缩放下那只等效 2.5 / 2 逻辑像素，手一抖就算划词。
+	// 每次手势现取，这样拖动窗口到别的缩放显示器上也会跟着变。
 )
 
 // 回调只创建一次并常驻；syscall.NewCallback 的返回值必须被持有，
@@ -131,9 +128,10 @@ func consumeHookEvents(events <-chan hookEvent, onGesture func(point, string), o
 			}
 			haveDown = false
 
+			dxTh, dyTh := dragThreshold()
 			dx := abs32(ev.pt.X - downPt.X)
 			dy := abs32(ev.pt.Y - downPt.Y)
-			if dx > dragThresholdPx || dy > dragThresholdPx {
+			if dx > dxTh || dy > dyTh {
 				// 拖动 → 这是一次框选
 				lastUpTime = 0
 				dispatchGesture(onGesture, ev.pt, "drag")
@@ -142,10 +140,11 @@ func consumeHookEvents(events <-chan hookEvent, onGesture func(point, string), o
 
 			// 单击：可能是双击选词的第一下，也可能是第二下
 			now := tickCount64()
+			proxX, proxY := doubleClickProximity()
 			if lastUpTime != 0 &&
 				now-lastUpTime <= dblMs &&
-				abs32(ev.pt.X-lastUpPt.X) <= dblProximityPx &&
-				abs32(ev.pt.Y-lastUpPt.Y) <= dblProximityPx {
+				abs32(ev.pt.X-lastUpPt.X) <= proxX &&
+				abs32(ev.pt.Y-lastUpPt.Y) <= proxY {
 				lastUpTime = 0
 				dispatchGesture(onGesture, ev.pt, "double-click")
 				continue
