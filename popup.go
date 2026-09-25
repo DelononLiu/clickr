@@ -150,7 +150,7 @@ func hideMenu() {
 // logForegroundAfterMenuShown 记录菜单出现后的前台窗口，用来验证「不抢焦点」。
 //
 // 判据：菜单显示之后，前台窗口**必须仍然是源程序**。
-// 如果变成我们自己的窗口（KBSnifferFloatBall / KBSnifferSelectMenu），
+// 如果变成我们自己的窗口（ClickrFloatBall / ClickrSelectMenu），
 // 那就是抢了焦点，属于严重回归。
 func logForegroundAfterMenuShown() {
 	fg, _, _ := pGetForegroundWindow.Call()

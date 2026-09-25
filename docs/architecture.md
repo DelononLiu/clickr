@@ -1,4 +1,4 @@
-# kb-sniffer 架构设计
+# clickr 架构设计
 
 **读者**：要改动这个项目的人。
 **不在这里的内容**：怎么用 → `README.md`；为什么这么选 → `docs/decisions.md`；哪里还欠着 → `docs/design-debt.md`。
@@ -392,11 +392,11 @@ UIA 会引入两条新的跨线程路径（异步的选区矩形、可能失败�
 
 | 用在哪 | 用哪个 | 为什么 |
 |---|---|---|
-| 仓库名、模块路径、可执行文件名 | `kb-sniffer` | 跟仓库一致是惯例；`go install` 从模块路径末段取二进制名，会产出 `kb-sniffer` |
-| AppData 目录、日志文件、窗口标题、弹框标题 | `kb-sniffer` | 给文件系统和给人看的，kebab 可读、grep 得到 |
-| **窗口类名** | **`KBSniffer*`** | 它是 **Win32 标识符**，不是展示名 |
+| 仓库名、模块路径、可执行文件名 | `clickr` | 跟仓库一致是惯例；`go install` 从模块路径末段取二进制名，会产出 `clickr` |
+| AppData 目录、日志文件、窗口标题、弹框标题 | `clickr` | 给文件系统和给人看的，kebab 可读、grep 得到 |
+| **窗口类名** | **`Clickr*`** | 它是 **Win32 标识符**，不是展示名 |
 
-一句话规则：**给人看/给文件系统看的用 `kb-sniffer`，作为 Win32 标识符出现的用 `KBSniffer`。**
+一句话规则：**给人看/给文件系统看的用 `clickr`，作为 Win32 标识符出现的用 `Clickr`。**
 
 类名用 PascalCase 无连字符，是跟着 Win32 生态的惯例走的。实测读到的真实窗口类名：
 
@@ -407,20 +407,57 @@ Chrome_WidgetWin_1              mintty
 ```
 
 **没有一个用连字符**。类名是"这是哪个程序的东西"的标识符，
-`KBSnifferFloatBall` 一眼能认出是应用类名，`kb-sniffer-ball` 更像 CSS 类名。
+`ClickrFloatBall` 一眼能认出是应用类名，`clickr-ball` 更像 CSS 类名。
 
-> 改名字时要覆盖的完整清单（容易漏）：
-> 模块路径、exe 名、窗口类名、窗口标题、弹框标题、日志前缀、日志文件名、
-> AppData/配置目录名、dump 文件扩展名、脚本里的环境变量前缀（`KBS_*`）、
-> 脚本里的默认路径、测试窗口类名与测试标记字符串。改完用
-> `grep -rIn -e 旧名 -e 旧名小写 .` 扫一遍确认无残留。
+### 改名字的完整清单
+
+这份清单是实测出来的 —— 项目改过两次名（`NexusKB` → `kb-sniffer` → `clickr`），
+第一次漏了**旧进程没杀**（残留实例带全局鼠标钩子，会和新实例抢事件，
+还锁住旧 exe 与旧日志让删除静默失败）。
+
+**仓库内**（改完用 `grep -rIn -e 旧名 -e 旧名小写 .` 扫残留）：
+
+| 项 | 示例 |
+|---|---|
+| 模块路径 | `module github.com/DelononLiu/clickr` |
+| exe 名 | `clickr.exe` / `clickr-debug.exe` / `clickr.test.exe` |
+| 窗口类名 | `ClickrFloatBall` / `ClickrSelectMenu` |
+| 窗口标题、弹框标题 | `"clickr"` |
+| 日志前缀、日志文件名 | `"clickr build=%s"` / `clickr.log` |
+| AppData / 配置目录名 | `%LocalAppData%\clickr\` |
+| dump 文件扩展名 | `.clkr` |
+| 脚本环境变量前缀 | `CLICKR_WIN_DIR` / `CLICKR_TEST_DIR` |
+| 脚本里的默认路径 | `/mnt/c/Users/long2015/clickr` |
+| 测试窗口类名、测试标记字符串 | `ClickrMSAATestWnd` / `clickr-MSAA-TEST-8823` |
+
+**仓库外**（最容易漏，因为 grep 扫不到）：
+
+| 项 | 说明 |
+|---|---|
+| 项目目录名 | `/home/long2015/Code/clickr` |
+| Windows 部署目录 | `C:\Users\long2015\clickr`（旧的要清掉） |
+| 旧的 AppData 目录 | 含旧 `ball.pos`，不清会留垃圾 |
+| **正在运行的旧实例** | **必须杀掉** —— 否则锁文件、抢鼠标钩子 |
+| git remote URL | 仓库改名后 `set-url` |
+
+### 一个实测发现的隐患
+
+这台机器上**已经存在另一个叫 `clickr` 的程序**
+（`%LocalAppData%\com.clickr.app`，Tauri 应用，`.clickr/config.json`）。
+
+我们用的路径（`%LocalAppData%\clickr\`、`%AppData%\clickr\`）和它**不冲突**，
+但 `deploy.sh` 原本用 `taskkill /F /IM clickr.exe` **按映像名**杀进程 ——
+哪天那个程序也提供 `clickr.exe` 并在运行，就会被一起杀掉。
+
+所以现在改成**按记录的 PID** 停：启动时把 PID 写进 `WIN_DIR/.pid`，
+下次只杀那一个。没有 PID 记录时才退回映像名，**并且会打印警告**。
 
 ---
 
-## 9. 目录结构
+## 10. 目录结构
 
 ```
-kb-sniffer/
+clickr/
   *.go              15 个生产文件（见 §3）+ 7 个 *_test.go
   scripts/          build.sh / test.sh / deploy.sh
   docs/             architecture.md / decisions.md / design-debt.md
@@ -452,8 +489,8 @@ Go 里「目录 = 包」，不是"分类文件夹"。判断该不该建包看四
 22 个测试，**在真 Windows 上跑**（渲染依赖 GDI，无法在 Linux 执行）：
 
 ```sh
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o kb-sniffer.test.exe .
-./kb-sniffer.test.exe -test.v          # 经 WSL interop 执行
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o clickr.test.exe .
+./clickr.test.exe -test.v          # 经 WSL interop 执行
 ```
 
 | 区域 | 覆盖 | 有效性 |

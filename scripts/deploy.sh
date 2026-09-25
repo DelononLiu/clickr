@@ -6,7 +6,7 @@
 # 「源文件与目标文件 md5 一致」—— 那只证明复制没出错，证明不了源是新的。
 # 用户测了半天的旧版，我还以为修好了。
 #
-# 现在改成让**产物自报身份**：拷完之后直接问它 dist/kb-sniffer-debug.exe -version，
+# 现在改成让**产物自报身份**：拷完之后直接问它 dist/clickr-debug.exe -version，
 # 与 dist/.buildstamp 比对。不一致就非零退出。
 #
 # 用法：
@@ -17,9 +17,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-APP=kb-sniffer
+APP=clickr
 DIST=dist
-WIN_DIR="${KBS_WIN_DIR:-/mnt/c/Users/long2015/kb-sniffer}"
+WIN_DIR="${CLICKR_WIN_DIR:-/mnt/c/Users/long2015/clickr}"
+PID_FILE="${CLICKR_PID_FILE:-}"
 RESTART=0
 SKIP_BUILD=0
 for a in "$@"; do
@@ -31,19 +32,36 @@ for a in "$@"; do
 done
 
 [ "$SKIP_BUILD" = 1 ] || ./scripts/build.sh >/dev/null
+[ -n "$PID_FILE" ] || PID_FILE="$WIN_DIR/.pid"
 EXPECT="$(cat "$DIST/.buildstamp")"
 echo "本次构建戳: $EXPECT"
 
-# stop_app 结束正在运行的实例，**并确认它真的没了**。
+# stop_app 结束**我们启动的那个**实例。
 #
-# 这里以前写的是 `taskkill ... || true` —— 把失败静默吞掉了。
-# 结果改名之后旧映像名的进程（NexusKB.exe）一直活着：它锁住旧 exe 与旧日志，
-# 让删除和覆盖都失败却不报错，而且它带着全局鼠标钩子，会和新的实例抢事件。
-# 所以现在必须复核，不能吞。
+# 优先按记录的 PID 杀，而不是按映像名。原因是实测发现的一个隐患：
+# 这台机器上已经存在另一个叫 clickr 的程序
+# （%LocalAppData%\com.clickr.app，Tauri 应用）。
+# 按映像名（taskkill /F /IM clickr.exe）哪天会把它一起杀掉。
+# 认 PID 就不会误伤。
+#
+# 另外这里**必须复核**，不能吞错：残留实例带着全局鼠标钩子，会和新实例抢划词事件。
+# 之前写的是 `taskkill ... || true`，结果改名后旧映像名的进程一直活着，
+# 锁住旧 exe 与旧日志，删除和覆盖都失败却不报错。
 stop_app() {
-	taskkill.exe /F /IM "$APP.exe" >/dev/null 2>&1 || true
+	if [ -f "$PID_FILE" ]; then
+		pid="$(tr -d '\r\n ' < "$PID_FILE" 2>/dev/null || true)"
+		[ -n "$pid" ] && taskkill.exe /F /PID "$pid" >/dev/null 2>&1 || true
+	fi
+
+	# 兜底：没有 PID 记录时（例如程序是用户自己双击起来的）只能按映像名。
+	# 这时如果机器上有同名的别的程序，会一起被杀 —— 所以要说出来。
 	if tasklist.exe /FO CSV 2>/dev/null | tr -d '\r' | grep -qi "\"$APP.exe\""; then
-		echo "错误：无法结束 $APP.exe，它仍在运行" >&2
+		echo "注意：没有 PID 记录，改按映像名结束 $APP.exe（可能误伤同名的其他程序）"
+		taskkill.exe /F /IM "$APP.exe" >/dev/null 2>&1 || true
+	fi
+
+	if tasklist.exe /FO CSV 2>/dev/null | tr -d '\r' | grep -qi "\"$APP.exe\""; then
+		echo "错误：$APP.exe 仍在运行，停不掉；继续部署会拿到被锁住的旧文件" >&2
 		return 1
 	fi
 }
@@ -71,12 +89,17 @@ echo "✅ 部署校验通过（$ACTUAL）→ $WIN_DIR"
 if [ "$RESTART" = 1 ]; then
 	# 用 WMI 创建进程：它由 WMI 服务创建，不是 WSL interop 的子进程，
 	# 因此不会随终端/WSL 会话退出而被杀。
-	PS1="$(wslpath -w "$WIN_DIR" 2>/dev/null || echo 'C:\Users\long2015\kb-sniffer')"
+	PS1="$(wslpath -w "$WIN_DIR" 2>/dev/null || echo 'C:\Users\long2015\clickr')"
 	cat > "$WIN_DIR/.launch.ps1" <<PS
 \$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = '"$PS1\\$APP.exe"' }
 if (\$r.ReturnValue -eq 0) { Write-Output "PID=\$(\$r.ProcessId)" } else { Write-Output "FAILED=\$(\$r.ReturnValue)" }
 PS
-	powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PS1\\.launch.ps1"
+	out="$(powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PS1\\.launch.ps1" | tr -d '\r')"
+	echo "$out"
+	# 记下 PID：下次 stop_app 就能精确地只杀我们启动的那个
+	if printf '%s' "$out" | grep -q '^PID='; then
+		printf '%s' "$out" | sed -n 's/^PID=//p' > "$PID_FILE"
+	fi
 else
 	echo "（未重启；要重启加 --restart）"
 fi

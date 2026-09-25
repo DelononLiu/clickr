@@ -1,6 +1,6 @@
 //go:build windows
 
-// kb-sniffer —— Windows 划词助手最小实现（Go）。
+// clickr —— Windows 划词助手最小实现（Go）。
 //
 // 只做四件事：
 //  1. 全局鼠标钩子识别「划词」动作（拖选 / 双击选词）
@@ -36,7 +36,7 @@ import (
 // buildStamp 由 build.sh 通过 -ldflags "-X main.buildStamp=..." 注入。
 //
 // 存在的意义是防「发错版本」：之前吃过一次亏 —— 打完补丁只 build 到临时文件，
-// 却把旧的 kb-sniffer.exe 部署了出去，用户测的全程是旧版。
+// 却把旧的 clickr.exe 部署了出去，用户测的全程是旧版。
 // 有了构建戳就能直接从日志/`-version` 确认跑的是哪个版本。
 var buildStamp = "dev"
 
@@ -51,7 +51,7 @@ func main() {
 
 	verbose := flag.Bool("debug", false, "打印取词/动作日志")
 	selfTest := flag.Bool("selftest", false, "显示悬浮球与菜单 2.5 秒后退出（自检）")
-	dump := flag.String("dump", "", "把渲染结果导出成 <前缀>_ball.kbs / <前缀>_menu.kbs 后退出")
+	dump := flag.String("dump", "", "把渲染结果导出成 <前缀>_ball.clkr / <前缀>_menu.clkr 后退出")
 	showVersion := flag.Bool("version", false, "打印构建戳后退出（用来确认部署的到底是哪个版本）")
 	probe := flag.Bool("probe", false, "只读取文诊断：对当前鼠标位置跑一遍 UIA/MSAA 并打印结果；不发 Ctrl+C")
 	probeAt := flag.String("probe-at", "", "配合 -probe 使用：指定屏幕坐标 \"x,y\"，而不是用鼠标当前位置")
@@ -64,7 +64,7 @@ func main() {
 		//
 		// 这里**不用** MessageBox：它会阻塞等用户点确定，
 		// 在被脚本/管道调用时会把调用方一起挂死（真踩过）。
-		msg := "kb-sniffer build=" + buildStamp
+		msg := "clickr build=" + buildStamp
 		fmt.Println(msg)
 		writeCrashLog(msg)
 		return
@@ -77,7 +77,7 @@ func main() {
 	//
 	// syscall.NewLazyDLL 只对 kernel32/advapi32/shell32 做 System32 钉死，
 	// 其余（user32/gdi32/ole32/oleaut32/**oleacc**/shcore）走标准搜索顺序，
-	// 也就是**应用目录优先** —— 只要有人往 kb-sniffer.exe 同目录放一个 oleacc.dll，
+	// 也就是**应用目录优先** —— 只要有人往 clickr.exe 同目录放一个 oleacc.dll，
 	// 就会被我们加载并调用。
 	//
 	// 这个 exe 就放在用户可写的目录里，所以这是真实的本地提权面。
@@ -90,7 +90,7 @@ func main() {
 
 	// ---- 1) DPI 感知：必须在创建任何窗口之前设置 ----
 	aware := setDPIAwareness()
-	log.Printf("[init] kb-sniffer build=%s DPI 感知=%s", buildStamp, aware)
+	log.Printf("[init] clickr build=%s DPI 感知=%s", buildStamp, aware)
 
 	// ---- 3) 建窗口 ----
 	if err := createWindows(); err != nil {
@@ -206,8 +206,8 @@ func main() {
 //
 // 用法：
 //
-//	kb-sniffer-debug.exe -probe              # 用当前鼠标位置（裸写，不带值）
-//	kb-sniffer-debug.exe -probe -probe-at=800,400   # 指定屏幕坐标（物理像素）
+//	clickr-debug.exe -probe              # 用当前鼠标位置（裸写，不带值）
+//	clickr-debug.exe -probe -probe-at=800,400   # 指定屏幕坐标（物理像素）
 func runProbe(arg string) {
 	pt, err := parseProbePoint(arg)
 	if err != nil {
@@ -281,7 +281,7 @@ func parseProbePoint(arg string) (point, error) {
 //	"NKB1" + int32 w + int32 h + w*h*4 字节 BGRA（预乘 alpha，和 UpdateLayeredWindow 一致）
 func runDump(prefix string) {
 	renderBall()
-	writeDump(prefix+"_ball.kbs", ballSurf)
+	writeDump(prefix+"_ball.clkr", ballSurf)
 
 	// 用真实的三项菜单来导出，包含 hover 态（第 0 项）。
 	// 这里不需要锁：runDump 在启动期跑，此时钩子/采集线程都还没起。
@@ -292,9 +292,9 @@ func runDump(prefix string) {
 	w, h := menuWindowSize(n)
 	menuSurf = newSurface(w, h)
 	renderMenu()
-	writeDump(prefix+"_menu.kbs", menuSurf)
+	writeDump(prefix+"_menu.clkr", menuSurf)
 
-	log.Printf("[dump] 已导出 %s_ball.kbs (%dx%d) 与 %s_menu.kbs (%dx%d)，scale=%.2f",
+	log.Printf("[dump] 已导出 %s_ball.clkr (%dx%d) 与 %s_menu.clkr (%dx%d)，scale=%.2f",
 		prefix, ballWindowSize(), ballWindowSize(), prefix, w, h, scale)
 }
 
@@ -379,7 +379,7 @@ func logFilePath() string {
 	if err != nil || dir == "" {
 		return ""
 	}
-	return filepath.Join(dir, "kb-sniffer", "kb-sniffer.log")
+	return filepath.Join(dir, "clickr", "clickr.log")
 }
 
 func openLogFile() *os.File {
@@ -421,6 +421,6 @@ func fatal(format string, args ...any) {
 	}
 	log.Printf("[fatal] %s", msg)
 	// owner 传悬浮球窗口：传 0 的话这个框会被我们自己的 topmost 悬浮球盖住
-	messageBoxOwned(hwndBall, "kb-sniffer 启动失败", msg, mbOK|mbIconError|mbTopmost|mbSetForeground)
+	messageBoxOwned(hwndBall, "clickr 启动失败", msg, mbOK|mbIconError|mbTopmost|mbSetForeground)
 	os.Exit(1)
 }

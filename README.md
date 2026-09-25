@@ -1,4 +1,4 @@
-# kb-sniffer
+# clickr
 
 Windows 划词助手的最小实现：**划词 → 取到选中文字 → 在选区旁弹出菜单**，外加一个可拖动的悬浮球。
 
@@ -37,9 +37,9 @@ dist/           构建产物（gitignore）
 
 ## 跑起来
 
-编译好的可执行文件：**`C:\Users\long2015\kb-sniffer\kb-sniffer.exe`**
+编译好的可执行文件：**`C:\Users\long2015\clickr\clickr.exe`**
 
-1. 双击 `kb-sniffer.exe` → 屏幕右侧出现一个白色圆球（带品牌红图标）
+1. 双击 `clickr.exe` → 屏幕右侧出现一个白色圆球（带品牌红图标）
 2. 在任意程序里**拖选一段文字**（或双击选词）→ 松开鼠标后菜单自动弹在选区旁边
 3. 菜单里三项：`复制` / `搜索` / `翻译`
 4. 点别处 → 菜单自动收起
@@ -49,7 +49,7 @@ dist/           构建产物（gitignore）
 
 | 参数 | 作用 |
 |---|---|
-| `-debug` | 打印取词/动作日志（同时写 `%LocalAppData%\kb-sniffer\kb-sniffer.log`） |
+| `-debug` | 打印取词/动作日志（同时写 `%LocalAppData%\clickr\clickr.log`） |
 | `-version` | 打印构建戳后退出 —— 用来确认"跑着的到底是哪个版本" |
 | `-selftest` | 显示悬浮球和菜单示例 2.5 秒后退出，并打印各窗口的 `visible` / `rect` |
 | `-dump <前缀>` | 把渲染结果导出成裸像素文件，供离线逐像素检查 |
@@ -77,7 +77,7 @@ dist/           构建产物（gitignore）
 现在 `deploy.sh` 拷完之后会直接问产物自己：
 
 ```
-./dist/kb-sniffer-debug.exe -version     # -> kb-sniffer build=20260926-050136
+./dist/clickr-debug.exe -version     # -> clickr build=20260926-050136
 ```
 
 与 `dist/.buildstamp` 比对，不一致就非零退出。`build.sh` 也会在构建后用 `grep`
@@ -88,8 +88,8 @@ dist/           构建产物（gitignore）
 渲染依赖 GDI，只能在 Windows 上跑；交叉编译测试二进制再通过 WSL interop 执行：
 
 ```bash
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o kb-sniffer.test.exe .
-./kb-sniffer.test.exe -test.v
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o clickr.test.exe .
+./clickr.test.exe -test.v
 ```
 
 覆盖：手势识别（拖选 / 抖动 / 单击 / 双击 / 远距离单击不误判）、弹层定位（四角与正中都完整落进工作区、不遮挡锚点）、剪贴板快照往返（**直接复现过真实故障**）、格式分类、MSAA 端到端（自建窗口 + Static 控件读回文本，同时验证 vtable 槽位 / BSTR / `accLocation` / 子控件命中）、窗口可见性回归、逐像素渲染断言。
@@ -128,7 +128,7 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o kb-sniffer.test.exe .
 > 不代表 UIA 坏了。只有剪贴板失败（或它在控制台里被禁用）时 UIA 才会上场。
 > 我在实测中就被这一点误导过一次，白查了一轮。
 
-跑 `kb-sniffer-debug.exe -probe` 可以对当前鼠标位置跑一遍**只读**的 UIA / MSAA 并打印结果，用来收集这个决策所需的实测数据。
+跑 `clickr-debug.exe -probe` 可以对当前鼠标位置跑一遍**只读**的 UIA / MSAA 并打印结果，用来收集这个决策所需的实测数据。
 
 **剪贴板通路**（`capture.go`）：
 
@@ -168,7 +168,7 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o kb-sniffer.test.exe .
 
 ### 悬浮球
 
-同样是一个分层窗口，处理拖动（`SetCapture` + 移动窗口）、`WM_DPICHANGED`（拖到另一块不同缩放的显示器上时重新渲染）、右键「退出」。位置存到 `%AppData%\kb-sniffer\ball.pos`。
+同样是一个分层窗口，处理拖动（`SetCapture` + 移动窗口）、`WM_DPICHANGED`（拖到另一块不同缩放的显示器上时重新渲染）、右键「退出」。位置存到 `%AppData%\clickr\ball.pos`。
 
 球体配色是从有道那个 PNG 里量出来的：浅色主题白球、深色主题 `#303134`，中心品牌红 **`#F0142F`**（精确值，测试里有断言）。
 

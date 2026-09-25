@@ -71,8 +71,8 @@ func getLastSelection() string {
 }
 
 const (
-	classBall = "KBSnifferFloatBall"
-	classMenu = "KBSnifferSelectMenu"
+	classBall = "ClickrFloatBall"
+	classMenu = "ClickrSelectMenu"
 )
 
 var wndProcAddr = syscall.NewCallback(wndProc)
@@ -99,7 +99,7 @@ func createLayeredWindow(class string) (uintptr, error) {
 	h, _, err := pCreateWindowExW.Call(
 		ex,
 		uintptr(unsafe.Pointer(utf16Ptr(class))),
-		uintptr(unsafe.Pointer(utf16Ptr("kb-sniffer"))),
+		uintptr(unsafe.Pointer(utf16Ptr("clickr"))),
 		uintptr(wsPopup),
 		0, 0, 10, 10,
 		0, 0, getModuleHandle(), 0)

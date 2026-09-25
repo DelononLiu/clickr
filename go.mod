@@ -1,3 +1,3 @@
-module github.com/DelononLiu/kb-sniffer
+module github.com/DelononLiu/clickr
 
 go 1.21

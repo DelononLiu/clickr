@@ -13,13 +13,13 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-APP=kb-sniffer
+APP=clickr
 DIST=dist
 
 # 放一份到 Windows 侧再执行：interop 启动 Windows 进程时，
 # 从 Windows 原生路径跑最稳（Linux 路径会被翻译成 UNC，个别 API 会挑剔）。
 # 用系统临时目录，别弄脏部署目录。
-WIN_DIR="${KBS_TEST_DIR:-/mnt/c/Users/long2015/AppData/Local/Temp/kb-sniffer-test}"
+WIN_DIR="${CLICKR_TEST_DIR:-/mnt/c/Users/long2015/AppData/Local/Temp/clickr-test}"
 
 export GOOS=windows
 export GOARCH=amd64
