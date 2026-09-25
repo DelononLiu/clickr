@@ -1,0 +1,4 @@
+*.exe
+*.test
+nkb_*.nkb
+.buildstamp
