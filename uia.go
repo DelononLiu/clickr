@@ -216,6 +216,9 @@ type uiaResult struct {
 	text      string
 	bounds    rect
 	hasBounds bool
+	// rects 是提供方返回的原始矩形列表（并集之前），只用于诊断输出 ——
+	// 实测不同提供方返回的形状差别很大（单个大矩形 / 逐行 / 末尾带退化标记）。
+	rects []rect
 }
 
 // uiaSelectionAtHitTest 只按坐标命中，不看焦点元素。
@@ -324,56 +327,90 @@ func uiaSelectionFromElement(el comPtr) (uiaResult, error) {
 		return uiaResult{}, ErrNoSelection
 	}
 
-	res := uiaResult{text: text}
-	if b, ok := textRangeLastRect(rg); ok {
+	res := uiaResult{text: text, rects: textRangeRects(rg)}
+	if b, ok := selectionBounds(res.rects); ok {
 		res.bounds, res.hasBounds = b, true
 	}
 	return res, nil
 }
 
-// textRangeLastRect 取选区矩形列表里的**最后一个**。
-//
-// 一段跨行的选区会有多个矩形，最后一个就是选区的末尾 ——
-// 把菜单弹在那里最贴近用户刚划完的位置。
-func textRangeLastRect(rg comPtr) (rect, bool) {
+// textRangeRects 取选区矩形列表（每 4 个 double 一组：left, top, width, height）。
+func textRangeRects(rg comPtr) []rect {
 	var psa uintptr
 	hr, _, _ := syscall.SyscallN(comVtblMethod(rg, textRangeGetBoundingRectangles),
 		uintptr(rg), uintptr(unsafe.Pointer(&psa)))
 	if int32(hr) < 0 || psa == 0 {
-		return rect{}, false
+		return nil
 	}
 	defer pSafeArrayDestroy.Call(psa)
 
 	var lb, ub int32
 	if r, _, _ := pSafeArrayGetLBound.Call(psa, 1, uintptr(unsafe.Pointer(&lb))); int32(r) < 0 {
-		return rect{}, false
+		return nil
 	}
 	if r, _, _ := pSafeArrayGetUBound.Call(psa, 1, uintptr(unsafe.Pointer(&ub))); int32(r) < 0 {
-		return rect{}, false
+		return nil
 	}
 	n := int(ub-lb) + 1
 	if n < 4 {
-		return rect{}, false
+		return nil
 	}
 
 	var data unsafe.Pointer
 	if r, _, _ := pSafeArrayAccessData.Call(psa, uintptr(unsafe.Pointer(&data))); int32(r) < 0 || data == nil {
-		return rect{}, false
+		return nil
 	}
 	defer pSafeArrayUnaccessData.Call(psa)
 
-	// 每 4 个 double 一组：left, top, width, height
 	vals := unsafe.Slice((*float64)(data), n)
-	last := vals[n-4:]
-	if last[2] <= 0 || last[3] <= 0 {
-		return rect{}, false
+	out := make([]rect, 0, n/4)
+	for i := 0; i+3 < n; i += 4 {
+		out = append(out, rect{
+			Left:   int32(vals[i]),
+			Top:    int32(vals[i+1]),
+			Right:  int32(vals[i] + vals[i+2]),
+			Bottom: int32(vals[i+1] + vals[i+3]),
+		})
 	}
-	return rect{
-		Left:   int32(last[0]),
-		Top:    int32(last[1]),
-		Right:  int32(last[0] + last[2]),
-		Bottom: int32(last[1] + last[3]),
-	}, true
+	return out
+}
+
+// selectionBounds 求选区矩形的**并集**。
+//
+// 为什么是并集而不是「最后一个矩形」：
+// 实测浏览器（Chromium）返回的数组里，末尾会带一个退化矩形（宽 1px、高 20px，
+// 看着像选区末尾的插入点标记），取「最后一个」就把弹窗锚点算到了那 1px 上。
+// 并集天生免疫这种噪声 —— 退化矩形落在文字范围内部，不会撑大外框。
+//
+// 单行选区时并集就是那一行的范围，右下角正好是选区的末尾；
+// 多行选区时是整块的外框，右下角落在最后一行的右端 —— 可预期，够用。
+func selectionBounds(rs []rect) (rect, bool) {
+	var (
+		out  rect
+		init bool
+	)
+	for _, r := range rs {
+		if r.width() <= 0 || r.height() <= 0 {
+			continue
+		}
+		if !init {
+			out, init = r, true
+			continue
+		}
+		if r.Left < out.Left {
+			out.Left = r.Left
+		}
+		if r.Top < out.Top {
+			out.Top = r.Top
+		}
+		if r.Right > out.Right {
+			out.Right = r.Right
+		}
+		if r.Bottom > out.Bottom {
+			out.Bottom = r.Bottom
+		}
+	}
+	return out, init
 }
 
 // ---------------------------------------------------------------- source

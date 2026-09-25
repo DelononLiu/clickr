@@ -27,6 +27,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"time"
 	"unsafe"
 )
@@ -51,7 +53,8 @@ func main() {
 	selfTest := flag.Bool("selftest", false, "显示悬浮球与菜单 2.5 秒后退出（自检）")
 	dump := flag.String("dump", "", "把渲染结果导出成 <前缀>_ball.nkb / <前缀>_menu.nkb 后退出")
 	showVersion := flag.Bool("version", false, "打印构建戳后退出（用来确认部署的到底是哪个版本）")
-	probe := flag.Bool("probe", false, "对当前鼠标位置跑一遍**只读**取文手段（UIA / MSAA）并打印结果；不发 Ctrl+C")
+	probe := flag.Bool("probe", false, "只读取文诊断：对当前鼠标位置跑一遍 UIA/MSAA 并打印结果；不发 Ctrl+C")
+	probeAt := flag.String("probe-at", "", "配合 -probe 使用：指定屏幕坐标 \"x,y\"，而不是用鼠标当前位置")
 	flag.Parse()
 
 	if *showVersion {
@@ -119,7 +122,7 @@ func main() {
 		workArea(initial).Right, workArea(initial).Bottom)
 
 	if *probe {
-		runProbe()
+		runProbe(*probeAt)
 		return
 	}
 
@@ -183,50 +186,88 @@ func main() {
 	log.Printf("[exit] 消息循环结束")
 }
 
-// runProbe 对当前鼠标位置跑一遍**只读**的取文手段并打印结果。
+// runProbe 在指定位置跑一遍**只读**的取文手段并打印结果。
 //
-// 存在的理由：pipeline 里 UIA 目前排在剪贴板之后（保守，避免回归），
-// 但 UIA 才是"更对"的那个 —— 它不发 Ctrl+C、不碰剪贴板、还能给出选区矩形。
+// 存在的理由：pipeline 里 UIA 排在剪贴板之后（保守，避免回归），
+// 但 UIA 才是更对的那个 —— 它不发 Ctrl+C、不碰剪贴板、还给得出选区矩形。
 // 要不要把它提到第一位，应该由**真实场景下的实测数据**决定，而不是靠推断。
 //
-// 这里刻意只跑只读的源：剪贴板法会发 Ctrl+C，不适合当诊断工具。
+// 两条必须记住的使用要点（都踩过）：
 //
-// 用法：把鼠标移到（已经在某个程序里选好的）文字上，然后
+//  1. **它不做策略判定。** 这里只回答「这个点能读到什么」，
+//     与产品里「该不该用这个手段」是两件事。控制台策略属于后者。
+//     （早先这里套了控制台判据，于是从终端启动探针时，前台窗口是终端，
+//     两个手段都被挡掉 —— 而用户的光标明明在浏览器上，什么都测不到。）
 //
-//	NexusKB-debug.exe -probe
-func runProbe() {
-	pt := getCursorPos()
-	c := probeCaptureContext()
-	fmt.Printf("位置 (%d,%d)  前台类名=%q  是否控制台=%v\n", pt.X, pt.Y, c.ForegroundClass, c.IsConsole)
+//  2. **给定坐标比用鼠标位置可靠。** 你要在终端里敲命令，鼠标就得在终端上；
+//     等命令跑起来再去指目标文字已经来不及了。所以支持 -probe "x,y"：
+//     先用一次 -probe 让它报出当前位置，之后就能固定坐标反复测。
+//
+// 用法：
+//
+//	NexusKB-debug.exe -probe              # 用当前鼠标位置（裸写，不带值）
+//	NexusKB-debug.exe -probe -probe-at=800,400   # 指定屏幕坐标（物理像素）
+func runProbe(arg string) {
+	pt, err := parseProbePoint(arg)
+	if err != nil {
+		fmt.Printf("坐标格式应为 \"x,y\"，例如 -probe 800,400（收到 %q）\n", arg)
+		return
+	}
+
+	fmt.Printf("探测位置 (%d,%d)\n", pt.X, pt.Y)
+	fmt.Printf("  前台窗口类名   = %q\n", foregroundWindowClass())
+	under := windowClass(windowFromPoint(pt))
+	fmt.Printf("  光标下窗口类名 = %q\n", under)
+	if isConsoleClass(under) {
+		fmt.Println("  注意：该点落在控制台窗口上。真控制台里 UIA/MSAA 都读不到选区" +
+			"（文本在控制台缓冲区里，要用控制台自己的 API），读不到是正常的。")
+	}
+	fmt.Println()
 
 	if err := initMSAA(); err != nil {
 		fmt.Printf("OleInitialize 失败: %v\n", err)
 	}
 
-	// UIA 用**按坐标命中**而不是焦点元素：探测进程一启动就成了前台窗口，
-	// 走焦点会探到我们自己（产品路径不会 —— 我们从不激活窗口）。
-	if c.IsConsole {
-		fmt.Printf("%-6s 不可用（控制台）\n", sourceUIA)
-	} else if res, err := uiaSelectionAtHitTest(pt); err != nil {
-		fmt.Printf("%-6s 失败: %v\n", sourceUIA, err)
+	// UIA：按坐标命中，不走焦点元素。
+	// 探针进程一启动就是前台窗口，走焦点只会探到它自己。
+	if res, err := uiaSelectionAtHitTest(pt); err != nil {
+		fmt.Printf("uia    失败: %v\n", err)
 	} else {
-		fmt.Printf("%-6s 取到 %d 字  bounds=%v  hasBounds=%v\n", sourceUIA,
+		fmt.Printf("uia    取到 %d 字  bounds=%v  hasBounds=%v\n",
 			len([]rune(res.text)), res.bounds, res.hasBounds)
 		fmt.Printf("       文本: %.160q\n", res.text)
+		fmt.Printf("       原始矩形 %d 个: %v\n", len(res.rects), res.rects)
 	}
 
-	ms := msaaSource{maxRunes: maxMSAATextRunes}
-	if !ms.Available(c) {
-		fmt.Printf("%-6s 不可用（控制台）\n", sourceMSAA)
-	} else if sel, err := ms.Read(c, pt); err != nil {
-		fmt.Printf("%-6s 失败: %v\n", sourceMSAA, err)
+	// MSAA 本身就是按坐标命中，无副作用
+	if r, ok := msaaTextAt(pt); ok {
+		fmt.Printf("msaa   取到 %d 字（accName/accValue）\n", len([]rune(r.text)))
+		fmt.Printf("       文本: %.160q\n", r.text)
 	} else {
-		fmt.Printf("%-6s 取到 %d 字  bounds=%v  hasBounds=%v\n", sourceMSAA,
-			len([]rune(sel.Text)), sel.Bounds, sel.HasBounds)
-		fmt.Printf("       文本: %.160q\n", sel.Text)
+		fmt.Println("msaa   失败: 该点没有可用的可访问对象文本")
 	}
+
+	fmt.Println()
 	fmt.Println("提示：剪贴板法不在探测范围内（它会发 Ctrl+C，有副作用）。")
-	fmt.Println("     要对比剪贴板法的结果，直接在程序里划词看菜单/日志即可。")
+	fmt.Println("     它是否可用、以及各手段的实际命中情况，看划词后的日志 来源= 字段。")
+}
+
+// parseProbePoint 解析 "x,y"；空串表示用当前鼠标位置。
+func parseProbePoint(arg string) (point, error) {
+	arg = strings.TrimSpace(arg)
+	if arg == "" {
+		return getCursorPos(), nil
+	}
+	parts := strings.SplitN(arg, ",", 2)
+	if len(parts) != 2 {
+		return point{}, fmt.Errorf("格式错误")
+	}
+	x, err1 := strconv.Atoi(strings.TrimSpace(parts[0]))
+	y, err2 := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err1 != nil || err2 != nil {
+		return point{}, fmt.Errorf("不是整数")
+	}
+	return point{int32(x), int32(y)}, nil
 }
 
 // runDump 把渲染出来的两张图导出成裸文件，供离线逐像素检查。

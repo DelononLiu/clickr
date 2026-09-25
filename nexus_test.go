@@ -1167,8 +1167,9 @@ func TestUIASlotProbe(t *testing.T) {
 			txt = bstrToString(bstr)
 			pSysFreeString.Call(bstr)
 		}
-		b, okb := textRangeLastRect(rg)
-		t.Logf("    段 %d: text=%.30q bounds=%v ok=%v", k, txt, b, okb)
+		raw := textRangeRects(rg)
+		b, okb := selectionBounds(raw)
+		t.Logf("    段 %d: text=%.30q bounds=%v ok=%v 原始矩形 %d 个: %v", k, txt, b, okb, len(raw), raw)
 		rg.release()
 	}
 }
