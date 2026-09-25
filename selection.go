@@ -159,6 +159,10 @@ func (p *capturePipeline) ReadIn(c captureContext, at point) (selection, error) 
 // 顺序就是优先级，改这里等于改策略。
 var capturePipelineDefault = &capturePipeline{sources: []textSource{
 	clipboardSource{},
+	// UIA 排在剪贴板之后、MSAA 之前：剪贴板拿不到精确选区时，
+	// UIA 给的是「精确选区 + 选区矩形」，比 MSAA 的「这一行」准得多。
+	// 实测确认 UIA 够可靠之后，把它提到第一位就能连 Ctrl+C 的副作用一起去掉。
+	uiaSource{},
 	msaaSource{maxRunes: maxMSAATextRunes},
 }}
 

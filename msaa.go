@@ -105,6 +105,7 @@ const (
 	vtI4       = 3
 	vtBstr     = 8
 	vtDispatch = 9
+	vtBool     = 11 // VARIANT_BOOL：0 = false，0xFFFF = true
 )
 
 // childID 返回 VT_I4 形态的取值。

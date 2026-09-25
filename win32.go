@@ -31,6 +31,7 @@ var (
 	pSetProcessDPIAware            = user32.NewProc("SetProcessDPIAware")
 	pGetDpiForMonitor              = shcore.NewProc("GetDpiForMonitor")
 	pGetModuleHandleW              = kernel32.NewProc("GetModuleHandleW")
+	pLoadLibraryW                  = kernel32.NewProc("LoadLibraryW")
 	pGetCurrentProcessId           = kernel32.NewProc("GetCurrentProcessId")
 	pGetConsoleWindow              = kernel32.NewProc("GetConsoleWindow")
 	pSetDefaultDllDirectories      = kernel32.NewProc("SetDefaultDllDirectories")
@@ -77,6 +78,9 @@ var (
 var (
 	pGetCursorPos             = user32.NewProc("GetCursorPos")
 	pGetForegroundWindow      = user32.NewProc("GetForegroundWindow")
+	pSendMessageW             = user32.NewProc("SendMessageW")
+	pSetFocus                 = user32.NewProc("SetFocus")
+	pSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
 	pGetClassNameW            = user32.NewProc("GetClassNameW")
 	pSetCursorPos             = user32.NewProc("SetCursorPos")
 	pWindowFromPoint          = user32.NewProc("WindowFromPoint")
@@ -140,10 +144,20 @@ var (
 
 // COM / BSTR
 var (
-	pOleInitialize = ole32.NewProc("OleInitialize")
-	pVariantClear  = oleaut32.NewProc("VariantClear")
-	pSysStringLen  = oleaut32.NewProc("SysStringLen")
-	pSysFreeString = oleaut32.NewProc("SysFreeString")
+	pOleInitialize    = ole32.NewProc("OleInitialize")
+	pCoCreateInstance = ole32.NewProc("CoCreateInstance")
+	pVariantClear     = oleaut32.NewProc("VariantClear")
+	pSysStringLen     = oleaut32.NewProc("SysStringLen")
+	pSysFreeString    = oleaut32.NewProc("SysFreeString")
+)
+
+// SAFEARRAY：UIA 的 GetBoundingRectangles 用 double 数组返回选区矩形
+var (
+	pSafeArrayGetLBound    = oleaut32.NewProc("SafeArrayGetLBound")
+	pSafeArrayGetUBound    = oleaut32.NewProc("SafeArrayGetUBound")
+	pSafeArrayAccessData   = oleaut32.NewProc("SafeArrayAccessData")
+	pSafeArrayUnaccessData = oleaut32.NewProc("SafeArrayUnaccessData")
+	pSafeArrayDestroy      = oleaut32.NewProc("SafeArrayDestroy")
 )
 
 // 注意：剪贴板快照刻意**不用** OLE。

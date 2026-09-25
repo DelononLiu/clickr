@@ -51,6 +51,7 @@ func main() {
 	selfTest := flag.Bool("selftest", false, "显示悬浮球与菜单 2.5 秒后退出（自检）")
 	dump := flag.String("dump", "", "把渲染结果导出成 <前缀>_ball.nkb / <前缀>_menu.nkb 后退出")
 	showVersion := flag.Bool("version", false, "打印构建戳后退出（用来确认部署的到底是哪个版本）")
+	probe := flag.Bool("probe", false, "对当前鼠标位置跑一遍**只读**取文手段（UIA / MSAA）并打印结果；不发 Ctrl+C")
 	flag.Parse()
 
 	if *showVersion {
@@ -99,11 +100,11 @@ func main() {
 	// 顺序很关键：必须先定 scale，再算位置。
 	// 窗口尺寸（含投影留白）都是乘在 scale 上的，拿未缩放的尺寸去夹紧位置
 	// 会在高 DPI 上把悬浮球挤出屏幕边缘（125% 下实测溢出 5px）。
-	probe := point{getSystemMetrics(0) / 2, getSystemMetrics(1) / 2}
+	dpiProbe := point{getSystemMetrics(0) / 2, getSystemMetrics(1) / 2}
 	if hasSaved {
-		probe = saved
+		dpiProbe = saved
 	}
-	scale = float64(dpiForPoint(probe)) / 96.0
+	scale = float64(dpiForPoint(dpiProbe)) / 96.0
 
 	initial := defaultBallPos()
 	if hasSaved {
@@ -116,6 +117,11 @@ func main() {
 		ballWindowSize(), ballWindowSize(), initial.X, initial.Y, scale,
 		workArea(initial).Left, workArea(initial).Top,
 		workArea(initial).Right, workArea(initial).Bottom)
+
+	if *probe {
+		runProbe()
+		return
+	}
 
 	if *dump != "" {
 		runDump(*dump)
@@ -175,6 +181,52 @@ func main() {
 		pDispatchMessageW.Call(uintptr(unsafe.Pointer(&m)))
 	}
 	log.Printf("[exit] 消息循环结束")
+}
+
+// runProbe 对当前鼠标位置跑一遍**只读**的取文手段并打印结果。
+//
+// 存在的理由：pipeline 里 UIA 目前排在剪贴板之后（保守，避免回归），
+// 但 UIA 才是"更对"的那个 —— 它不发 Ctrl+C、不碰剪贴板、还能给出选区矩形。
+// 要不要把它提到第一位，应该由**真实场景下的实测数据**决定，而不是靠推断。
+//
+// 这里刻意只跑只读的源：剪贴板法会发 Ctrl+C，不适合当诊断工具。
+//
+// 用法：把鼠标移到（已经在某个程序里选好的）文字上，然后
+//
+//	NexusKB-debug.exe -probe
+func runProbe() {
+	pt := getCursorPos()
+	c := probeCaptureContext()
+	fmt.Printf("位置 (%d,%d)  前台类名=%q  是否控制台=%v\n", pt.X, pt.Y, c.ForegroundClass, c.IsConsole)
+
+	if err := initMSAA(); err != nil {
+		fmt.Printf("OleInitialize 失败: %v\n", err)
+	}
+
+	// UIA 用**按坐标命中**而不是焦点元素：探测进程一启动就成了前台窗口，
+	// 走焦点会探到我们自己（产品路径不会 —— 我们从不激活窗口）。
+	if c.IsConsole {
+		fmt.Printf("%-6s 不可用（控制台）\n", sourceUIA)
+	} else if res, err := uiaSelectionAtHitTest(pt); err != nil {
+		fmt.Printf("%-6s 失败: %v\n", sourceUIA, err)
+	} else {
+		fmt.Printf("%-6s 取到 %d 字  bounds=%v  hasBounds=%v\n", sourceUIA,
+			len([]rune(res.text)), res.bounds, res.hasBounds)
+		fmt.Printf("       文本: %.160q\n", res.text)
+	}
+
+	ms := msaaSource{maxRunes: maxMSAATextRunes}
+	if !ms.Available(c) {
+		fmt.Printf("%-6s 不可用（控制台）\n", sourceMSAA)
+	} else if sel, err := ms.Read(c, pt); err != nil {
+		fmt.Printf("%-6s 失败: %v\n", sourceMSAA, err)
+	} else {
+		fmt.Printf("%-6s 取到 %d 字  bounds=%v  hasBounds=%v\n", sourceMSAA,
+			len([]rune(sel.Text)), sel.Bounds, sel.HasBounds)
+		fmt.Printf("       文本: %.160q\n", sel.Text)
+	}
+	fmt.Println("提示：剪贴板法不在探测范围内（它会发 Ctrl+C，有副作用）。")
+	fmt.Println("     要对比剪贴板法的结果，直接在程序里划词看菜单/日志即可。")
 }
 
 // runDump 把渲染出来的两张图导出成裸文件，供离线逐像素检查。

@@ -8,6 +8,44 @@
 
 ---
 
+## ✅ 已完成：UIA TextPattern
+
+**结论：已落地（`uia.go`），端到端验证通过。**
+
+实测证据（`TestUIAReadsRealSelection`，RichEdit 控件，控件自报 `EM_GETSEL=[4,7)`）：
+
+```
+UIA 读到: text="BBB" bounds={827 479 854 500} hasBounds=true
+```
+
+即**精确选区 + 贴合选区的矩形**，全程未发 Ctrl+C、未碰剪贴板。
+
+### 过程中的两条实测教训
+
+**1. 槽位顺序不能推，只能测。**
+按 IDL 声明顺序推断 `GetSelection` 在槽位 6，结果返回的是整行文字。
+用逐槽位探测（`-uia-slot=N`，每个槽位单跑一个进程，崩了只影响那一次）实测出真实布局：
+
+| 槽位 | 实测行为 | 实际方法 |
+|---|---|---|
+| 3 | 崩（参数对不上） | `RangeFromPoint` |
+| 4 | 崩（参数对不上） | `RangeFromChild` |
+| **5** | **返回 "BBB"** | **`GetSelection`** |
+| 6 | 返回整行 | `GetVisibleRanges` |
+| 7 | 只写 4 字节枚举，当指针读是垃圾 | `get_SupportedTextSelection` |
+
+也就是说 `get_SupportedTextSelection` 在实际 vtable 里排在**最后**，而不是 IDL 里的最前。
+
+**2. 选区属于焦点元素，不属于光标底下的元素。**
+一开始用 `ElementFromPoint`，命中到的是 `Document`(50030)，它的 TextPattern 返回**整篇内容**；
+而选区挂在 `Edit`(50004) 上。改成**焦点元素优先、命中测试兜底**才对。
+（真实划词时源程序本来就是前台，所以焦点元素才是正确入口。）
+
+> 附带发现：`-probe` 诊断模式**不能用焦点元素** —— 探测进程一启动就成了前台窗口，
+> 会探到它自己。产品路径不存在这个问题，因为我们从不激活自己的窗口。
+
+---
+
 ## 🔴 第 1 项：UI goroutine 独占窗口 / GDI / 布局状态
 
 **影响：最高。成本：中等偏高（改动机械但量大）。必须走在 UIA 前面。**

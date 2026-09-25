@@ -15,7 +15,9 @@ win32.go        Win32 API 裸绑定 + 常量
 wintypes.go     Win32 结构体 + 带类型的薄封装
 render.go       分层窗口软件渲染（距离场圆角/阴影、GDI 文字遮罩）
 hook.go         WH_MOUSE_LL 全局鼠标钩子 + 手势状态机
-capture.go      取文策略（剪贴板逐格式快照 + MSAA 兜底）
+selection.go    取文抽象（selection / textSource / pipeline / 错误分类）
+capture.go      剪贴板取文（逐格式快照）+ 采集线程
+uia.go          UIA TextPattern（精确选区 + 选区矩形）
 msaa.go         MSAA 取词（COM 基础设施 + IAccessible vtable）
 ui.go           窗口/布局/渲染/交互/持久化/菜单内容
 main.go         初始化、消息循环、自检与导出
@@ -90,12 +92,19 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o nkb.test.exe .
 
 两层，**顺序是刻意的**：
 
+三种手段按顺序试，**顺序就是优先级**（`selection.go` 里 `capturePipelineDefault.sources` 是一个切片，加一种就是加一行）：
+
 | 顺序 | 手段 | 能拿到什么 | 代价 |
 |---|---|---|---|
 | 1 | `Ctrl+C` + 读剪贴板 | 用户**真正拖选的那一段** | 有副作用、动剪贴板 |
-| 2 | MSAA `AccessibleObjectFromPoint` | 鼠标点所在的那个**元素/词/行** | 精度低（MSAA 没有选区 API） |
+| 2 | **UIA `TextPattern`** | **精确选区 + 选区矩形** | 依赖控件提供 TextPattern |
+| 3 | MSAA `AccessibleObjectFromPoint` | 鼠标点所在的**元素/词/行** | 精度低（MSAA 没有选区 API） |
 
-**不能反过来** —— MSAA 拿不到选区，放前面会把浏览器/编辑器里本来很准的"精确选区"退化成"这一行"。MSAA 只在剪贴板法失败时补位（典型场景：VS Code 集成终端里 Ctrl+C 不是复制）。
+**顺序不能乱**：MSAA 拿不到选区，放前面会把浏览器/编辑器里本来很准的"精确选区"退化成"这一行"。
+
+**为什么 UIA 不直接排第一**（它其实"更对"——不发 Ctrl+C、不碰剪贴板、还给得出选区矩形）：先保守放在剪贴板之后，避免回归。等实测确认它在各处都可靠，把它提到第一位就是**切片里换一行**的事，那一步能连 Ctrl+C 的副作用一起去掉。
+
+跑 `NexusKB-debug.exe -probe` 可以对当前鼠标位置跑一遍**只读**的 UIA / MSAA 并打印结果，用来收集这个决策所需的实测数据。
 
 **剪贴板通路**（`capture.go`）：
 
@@ -108,6 +117,12 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o nkb.test.exe .
 - 单次采集有 3 秒看门狗；超时后**不再并发新采集**（放弃的那次还在后台跑，并发操作同一个剪贴板会互相破坏）
 
 > **为什么不用 OLE 存剪贴板**：第一版用 `OleGetClipboard` 存 `IDataObject` + `OleSetClipboard` 还原，实测约 **6/7 次失败**，还会连累下一次取词。根因是 `OleGetClipboard` 返回的**代理只在剪贴板未被修改期间有效**，而我们紧接着就发 Ctrl+C 改了它。详见 `docs/decisions.md` D4。
+
+**UIA 通路**（`uia.go`）：`GetFocusedElement`（拿不到再按坐标命中）→ `GetCurrentPattern(UIA_TextPatternId)` → `GetSelection` → `GetText(-1)` + `GetBoundingRectangles`。
+
+拿到选区矩形后会**用它当弹窗锚点**（取选区末尾那个矩形），比鼠标抬起点准 —— 反向拖选时差别明显。
+
+> vtable 槽位是**机械探测出来的**，不是照头文件推的。我最初按 IDL 声明顺序推断 `GetSelection` 在槽位 6，结果它返回的是整行文字（其实 `GetVisibleRanges` 在槽位 6，`GetSelection` 在 5）。用 `-uia-slot=N` 逐槽位探测（每个槽位单跑一个进程，崩了只影响那一次）才定下来。教训写在代码注释里：**vtable 顺序这种东西，能测就别推。**
 
 ### 3. 弹出菜单
 
