@@ -27,8 +27,10 @@ ball.go         悬浮球：绘制 + 位置 + 位置持久化
 wndproc.go      窗口过程 + 鼠标交互 + 跨线程投递的唯一出口
 main.go         装配、消息循环、自检/导出/探针
 *_test.go       按领域拆分的测试（跑在真 Windows 上）
-build.sh        交叉编译（含构建戳与校验）
-docs/           设计文档
+
+scripts/        build.sh / test.sh / deploy.sh
+docs/           architecture.md / decisions.md / design-debt.md
+dist/           构建产物（gitignore）
 ```
 
 ---
@@ -52,21 +54,34 @@ docs/           设计文档
 | `-selftest` | 显示悬浮球和菜单示例 2.5 秒后退出，并打印各窗口的 `visible` / `rect` |
 | `-dump <前缀>` | 把渲染结果导出成裸像素文件，供离线逐像素检查 |
 
-## 编译
+## 编译 / 测试 / 部署
+
+三个脚本，各自一件事：
 
 ```bash
-./build.sh            # 在 Linux/WSL 上直接出 Windows exe
+./scripts/build.sh              # 交叉编译到 dist/
+./scripts/test.sh               # 交叉编译测试并在真 Windows 上跑
+./scripts/test.sh -test.run 'TestUIA' -test.v   # 只跑一部分（参数透传）
+./scripts/deploy.sh             # 部署到 Windows 并校验版本
+./scripts/deploy.sh --restart   # 顺便重启程序
 ```
 
 全部代码只用 `syscall` + 标准库，**没有第三方依赖、没有 cgo**，所以 `CGO_ENABLED=0` 就能交叉编译，不需要 mingw-w64。
 
-`build.sh` 每次注入一个构建戳，并在构建后 `grep` 二进制确认戳真的写进去了；不一致就非零退出。**部署后可以直接问产物自己**：
+### 为什么部署要单独写个脚本
 
-```bash
-./NexusKB-debug.exe -version     # -> NexusKB build=20260926-035149
+因为**我曾经做错过这件事**：打完补丁只 build 到了别处、却把旧的 exe 复制了过去，
+用户测了半天旧版我还以为修好了。而我当时的校验是「源文件与目标文件 md5 一致」
+—— 那只证明复制没出错，**证明不了源文件是新的**。
+
+现在 `deploy.sh` 拷完之后会直接问产物自己：
+
+```
+./dist/NexusKB-debug.exe -version     # -> NexusKB build=20260926-050136
 ```
 
-也建议在 Windows 上直接编：`go build -ldflags "-H=windowsgui -s -w" -o NexusKB.exe .`
+与 `dist/.buildstamp` 比对，不一致就非零退出。`build.sh` 也会在构建后用 `grep`
+确认戳真的写进了二进制。**让产物自报身份，而不是相信「我复制对了」。**
 
 ## 测试
 

@@ -386,6 +386,36 @@ UIA 会引入两条新的跨线程路径（异步的选区矩形、可能失败�
 
 ---
 
+## 9. 目录结构
+
+```
+NexusKB/
+  *.go              15 个生产文件（见 §3）+ 7 个 *_test.go
+  scripts/          build.sh / test.sh / deploy.sh
+  docs/             architecture.md / decisions.md / design-debt.md
+  dist/             构建产物（gitignore）
+  go.mod  README.md  .gitignore
+```
+
+**为什么只有一个包、不分目录**：整个项目是**单个可执行文件**、**没有外部复用者**、
+**没有要藏的私有实现边界** —— 三条都不触发"该建包"的条件。
+
+Go 里「目录 = 包」，不是"分类文件夹"。判断该不该建包看四件事（满足其一才考虑）：
+需要编译器强制的 API 边界、有第二个消费者、依赖或变化节奏不同、包大到影响导航。
+**「文件太长了」不在其中** —— 那个用同包多文件解决。
+
+而且 Go 对 import 环是零容忍（编译错误），拆包后 `ui` 要调 `capture`、`capture` 又要回调
+`ui` 就会撞墙。这是 Go 社区普遍"宁可大包也别过早拆"的原因。
+
+参考真实工程（读的本地源码）：`internal` 5/6、`cmd` 4/6、**`pkg` 0/6**。
+`pkg/` 在实践中基本不用 —— 它源自 Google 内部约定，被那个非官方的
+`golang-standards/project-layout` 传播开。
+
+**出现这些信号再拆**：出现第二个二进制 → 建 `cmd/`；要给第二个前端共用取文逻辑 →
+抽 `internal/capture`。
+
+---
+
 ## 9. 测试策略
 
 22 个测试，**在真 Windows 上跑**（渲染依赖 GDI，无法在 Linux 执行）：
