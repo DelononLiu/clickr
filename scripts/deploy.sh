@@ -50,7 +50,12 @@ echo "本次构建戳: $EXPECT"
 stop_app() {
 	if [ -f "$PID_FILE" ]; then
 		pid="$(tr -d '\r\n ' < "$PID_FILE" 2>/dev/null || true)"
-		[ -n "$pid" ] && taskkill.exe /F /PID "$pid" >/dev/null 2>&1 || true
+		# PID 会被系统回收 —— 先确认那个 PID 现在确实是我们的 exe。
+		# 不看的话，程序早就退出、PID 被别的进程复用时，我们会杀掉一个无关进程。
+		if [ -n "$pid" ] && tasklist.exe /FI "PID eq $pid" /FO CSV 2>/dev/null \
+			| tr -d '\r' | grep -qi "\"$APP.exe\""; then
+			taskkill.exe /F /PID "$pid" >/dev/null 2>&1 || true
+		fi
 	fi
 
 	# 兜底：没有 PID 记录时（例如程序是用户自己双击起来的）只能按映像名。

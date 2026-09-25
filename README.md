@@ -176,64 +176,77 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o clickr.test.exe .
 
 ## 已知限制
 
-1. ~~真控制台里什么都不做~~ → **已解决（走 UIA，不是剪贴板）**
+1. **只认鼠标划词**，不认键盘选区（Shift+方向键、Ctrl+A）。
 
-   实测日志（在 Windows Terminal 里跑 `ping -t` 然后划选它的输出）：
+2. **真控制台里取文依赖 UIA，剪贴板法被禁用。**
 
+   控制台里 Ctrl+C 的语义是**上下文相关**的：有选区时是「复制」，无选区才是「中断」。
+   我们发键的时机（拖选刚结束）通常有选区，所以常常能成功；但「鼠标抬起 → 等 160ms → 发键」
+   之间有窗口期，窗口内选区若消失（输出滚动、误点别处），它就会变成**真中断**，
+   把用户正在跑的命令杀掉。代价不对称（取不到词无所谓，杀掉命令不可接受），所以那里不发。
+
+   改用 UIA 读 —— 它是**只读**的，不发合成输入、不碰剪贴板，试它代价为零。实测可用。
+
+3. **UIA 只在控件提供 `TextPattern` 时可用**，各应用差距很大（都是实测）：
+
+   | 应用 | UIA | 说明 |
+   |---|---|---|
+   | Chrome / Edge（网页正文） | ✅ 精确选区 | 一字不差，且给出选区矩形 |
+   | Windows Terminal / conhost | ✅ 精确选区 | 读到选中的 ping 输出 |
+   | VS Code 编辑区 / 终端 | ❌ 拿不到 | Electron 默认不开可访问性 |
+   | 标准 `Edit` 控件 | ❌ 拿不到 | 它只提供 `ValuePattern` |
+
+   Electron 应用（VS Code / Slack / Discord 等）默认不开可访问性 —— Chromium 只在检测到
+   屏幕阅读器、或被显式要求时才构建那棵树。想让 UIA 在 VS Code 里生效：
+
+   ```jsonc
+   // VS Code settings.json
+   "editor.accessibilitySupport": "on"
    ```
-   drag @(1494,794)  →  来源=uia  17 字  "字节=32 时间<1ms TTL="   耗时 64ms
-   ```
 
-   关键点：**UIA 是只读的**——它不发合成输入、不碰剪贴板，所以「打断用户正在跑的命令」
-   这个风险根本不存在，在控制台里试它代价为零。而 MSAA 不行（`accValue` 给的是
-   整块缓冲区，实测弹出过内容不对的菜单）。
+   不开也没关系 —— 那些场景会正常退回剪贴板法（VS Code 的编辑区和终端都是这么工作的）。
 
-   剪贴板法在控制台里仍然禁用，但理由要说准确：**Ctrl+C 在终端里是上下文相关的**
-   —— 有选区时是「复制」（VS Code 终端实测如此），无选区时才是「中断」。
-   我们发它的时机通常有选区，所以常常能成功；但「鼠标抬起→等 160ms→发键」这个
-   **窗口期**里选区若消失（输出滚动、误点），它就会变成真中断，把用户正在跑的命令杀掉。
-   代价不对称，所以真控制台不用它。
+   跑 `clickr-debug.exe -probe` 可以看到每种手段在当前光标处到底能不能用。
 
-   **剪贴板法在控制台里仍然禁用**，这条不变。判定交给 `GetSupportedTextSelection`：
-   provider 说自己不支持选区就放弃，不会弹错内容。
+4. **剪贴板法有副作用**：会给源程序发一次真实的复制事件，可能进入它的复制历史。参数是编译期常量（`capture.go` 顶部 `selectionSettleMS` / `clipboardWaitMS` / `dedupeWindowMS`），**目前没有暴露成命令行参数**。
 
-2. **只认鼠标划词**，不认键盘选区（Shift+方向键、Ctrl+A）。
-3. **剪贴板法有副作用**：会给源程序发一次真实的复制事件，可能进入它的复制历史。参数是编译期常量（`capture.go` 顶部 `selectionSettleMS` / `clipboardWaitMS` / `dedupeWindowMS`），**目前没有暴露成命令行参数**。
-4. **剪贴板还原不是全格式覆盖**：非 HGLOBAL 的格式（`CF_PALETTE` / `CF_ENHMETAFILE` / `CF_OWNERDISPLAY` 等）和单格式超过 32MB 的内容不会被快照，还原时**会丢**。`CF_BITMAP` / `CF_DIB` / `CF_HDROP`（复制的文件）/ 注册格式（HTML / RTF）在内。
-5. **菜单上显示的快键键（`Ctrl+C` / `Enter` / `Ctrl+T`）目前只是展示，没有接线。** 窗口是 `WS_EX_NOACTIVATE` 拿不到键盘焦点，要接线只能再上键盘钩子。
-6. **分层窗口的阴影区会吃掉鼠标消息**。Windows 对分层窗口的命中测试按 alpha 通道做，alpha 不为 0 的地方就捕获点击（阴影 alpha 虽小但不为 0），而 `HTTRANSPARENT` 只在同线程内转发。所以悬浮球外面约 20px 的阴影环是一小块"死区"。
+5. **剪贴板还原不是全格式覆盖**：非 HGLOBAL 的格式（`CF_PALETTE` / `CF_ENHMETAFILE` / `CF_OWNERDISPLAY` 等）和单格式超过 32MB 的内容不会被快照，还原时**会丢**。`CF_BITMAP` / `CF_DIB` / `CF_HDROP`（复制的文件）/ 注册格式（HTML / RTF）在内。
+
+6. **菜单上显示的快捷键（`Ctrl+C` / `Enter` / `Ctrl+T`）目前只是展示，没有接线。** 窗口是 `WS_EX_NOACTIVATE` 拿不到键盘焦点，要接线只能再上键盘钩子。
+
+7. **分层窗口的阴影区会吃掉鼠标消息**。Windows 对分层窗口的命中测试按 alpha 通道做，alpha 不为 0 的地方就捕获点击（阴影 alpha 虽小但不为 0），而 `HTTRANSPARENT` 只在同线程内转发。所以悬浮球外面约 20px 的阴影环是一小块"死区"。
    菜单不受影响 —— 钩子在左键按下时会判「点是不是在卡片外」，是就立刻收起，点击会正常落到下面的程序上。
-7. **不支持高亮跟随**：菜单不会跟着选区跑，只在弹出那一刻定位。
-8. **失败没有用户可见的反馈**：采集失败、剪贴板还原失败都只写日志，而日志默认关闭（`-debug` 才开）。用户侧的表现是"什么都没发生"。见 `docs/design-debt.md` 第 3 项。
+
+8. **不支持高亮跟随**：菜单不会跟着选区跑，只在弹出那一刻定位。
+
+9. **失败没有用户可见的反馈**。采集失败、剪贴板还原失败都只写日志。日志现在**默认就写**
+   （`%LocalAppData%\clickr\clickr.log`，超过 1MB 轮转），`-debug` 只是额外再加一份到 stderr ——
+   但**用户不会去翻日志文件**，所以用户侧的表现仍然是"什么都没发生"。
+   见 [`docs/design-debt.md`](docs/design-debt.md) 第 3 项。
+
+10. **装了全局低层鼠标钩子的程序同时只能有一个。**
+
+    本程序用 `WH_MOUSE_LL` 全局钩子识别划词。任何**另一个也做划词**的程序同时运行，
+    两边都会识别到你的拖选、各弹各的菜单 —— 症状是"弹了两个菜单"或
+    "有时是我的、有时不是我的"，**极难排查**（两个程序各自的日志都显示工作正常）。
+
+    这台机器上就有另一个叫 `clickr` 的程序（`%LocalAppData%\com.clickr.app`，Tauri 应用），
+    看起来也是 AI 助手；现在休眠中，但过渡期不要同时开。
+    两者的数据路径不冲突（它用 `.clickr/` + `com.clickr.app/`，我们用
+    `%AppData%\clickr\` + `%LocalAppData%\clickr\`），所以不会串配置。
+
+---
 
 ## 下一步
 
-**接 UIA `TextPattern`**（精确选区 + 选区矩形）。
+见 [`docs/design-debt.md`](docs/design-debt.md)，按顺序：
 
-```
-IUIAutomation::ElementFromPoint(pt)
-  → GetCurrentPatternAs(UIA_TextPatternId)   → IUIAutomationTextPattern
-  → GetSelection()                            → IUIAutomationTextRangeArray
-  → GetElement(0)                             → IUIAutomationTextRange
-  → GetText(-1) + GetBoundingRectangles()
-```
+1. **UI goroutine 独占窗口 / GDI / 布局状态** —— 线程所有权契约目前只活在注释与命名里，
+   这是历史上 3 个 bug（跨线程操作窗口、测试死锁、数据竞争）的共同根因。
+2. **用户可见的失败通道** —— 采集失败与剪贴板还原失败应该让用户看见，而不是只进日志文件。
+3. 键盘选区；菜单快捷键接线；真控制台的 `AttachConsole` + `GetConsoleSelectionInfo` 路径
+   （有了它就不必靠窗口类名一刀切禁掉剪贴板法，也能消掉第 2 条里那个窗口期风险）。
 
-好处：不再发 Ctrl+C（无副作用）、拿到**选区矩形**（弹窗贴住选区末尾而不是猜鼠标点）、能区分「没有选区」和「取文失败」。
-
-**但顺序很重要 —— 必须先做两件前置**，否则 UIA 会变成对 `captureSelection` 的第 4 次、紧接着第 5 次修改：
-
-```
-① UI goroutine 独占窗口/GDI/布局状态   ← 否则 UIA 的两条异步路径又添两处竞争
-② TextSource 抽象 + 错误分类           ← 做完之后 UIA 只是"新增一个文件 + sources 加一行"
-③ UIA TextPattern
-```
-
-详见 [`docs/design-debt.md`](docs/design-debt.md)。
-
-**Go 侧的现状**：唯一的 UIA 库 `hnakamur/w32uiautomation`（及其 fork `BelodedAleksey/w32uiautomation`）**没有实现 TextPattern / TextRange / TextRangeArray** —— 恰好是取选区所需的那三个接口，得自己补，大约 150 行。
-
-**vtable 的字段顺序必须和 `UIAutomationClient.h` 里接口方法的声明顺序逐字一致**，漏一个或顺序错位就会跳到错误的函数地址上，症状是崩溃或莫名 HRESULT。照抄时务必对着 SDK 头文件核对：
-
-```
-C:\Program Files (x86)\Windows Kits\10\Include\<版本>\um\UIAutomationClient.h
-```
+> `TextPattern` 那条路已经接完（`uia.go`），排在 pipeline 第二位。
+> 它能从"改 5 个文件"降为"新增一个文件 + sources 加一行"，靠的是先做完了取文抽象
+> （`selection.go`）—— 这也是为什么第 1、2 项要排在前面：**先有结构，再加手段。**

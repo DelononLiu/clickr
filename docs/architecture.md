@@ -429,6 +429,8 @@ Chrome_WidgetWin_1              mintty
 | 脚本环境变量前缀 | `CLICKR_WIN_DIR` / `CLICKR_TEST_DIR` |
 | 脚本里的默认路径 | `/mnt/c/Users/long2015/clickr` |
 | 测试窗口类名、测试标记字符串 | `ClickrMSAATestWnd` / `clickr-MSAA-TEST-8823` |
+| **自定义文件格式的魔数** | `CLKR`（dump 文件的头 4 字节 —— 最容易漏，它藏在二进制格式注释里） |
+| 构建产物目录里的旧产物 | `dist/` 里会同时躺着好几个旧名字的 exe，跑错一个就白排查 |
 
 **仓库外**（最容易漏，因为 grep 扫不到）：
 

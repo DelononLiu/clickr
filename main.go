@@ -278,7 +278,7 @@ func parseProbePoint(arg string) (point, error) {
 //
 // 文件格式（小端）：
 //
-//	"NKB1" + int32 w + int32 h + w*h*4 字节 BGRA（预乘 alpha，和 UpdateLayeredWindow 一致）
+//	"CLKR" + int32 w + int32 h + w*h*4 字节 BGRA（预乘 alpha，和 UpdateLayeredWindow 一致）
 func runDump(prefix string) {
 	renderBall()
 	writeDump(prefix+"_ball.clkr", ballSurf)
