@@ -1,8 +1,16 @@
 //go:build windows
 
-// ball.go —— 悬浮球：绘制与位置更新。
+// ball.go —— 悬浮球：绘制、位置更新、位置持久化。
 
 package main
+
+import (
+	"log"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
 
 func renderBall() {
 	th := loadTheme()
@@ -51,4 +59,48 @@ func moveBallTo(pt point) {
 func ballCenter() point {
 	half := ballWindowSize() / 2
 	return point{ballPos.X + half, ballPos.Y + half}
+}
+
+func posFile() string {
+	dir, err := os.UserConfigDir()
+	if err != nil || dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "NexusKB", "ball.pos")
+}
+
+func loadBallPos() (point, bool) {
+	f := posFile()
+	if f == "" {
+		return point{}, false
+	}
+	b, err := os.ReadFile(f)
+	if err != nil {
+		return point{}, false
+	}
+	parts := strings.Fields(strings.TrimSpace(string(b)))
+	if len(parts) != 2 {
+		return point{}, false
+	}
+	x, err1 := strconv.Atoi(parts[0])
+	y, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil {
+		return point{}, false
+	}
+	return point{int32(x), int32(y)}, true
+}
+
+func saveBallPos(pt point) {
+	f := posFile()
+	if f == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+		log.Printf("[ui] 保存位置失败: %v", err)
+		return
+	}
+	data := strconv.Itoa(int(pt.X)) + " " + strconv.Itoa(int(pt.Y))
+	if err := os.WriteFile(f, []byte(data), 0o644); err != nil {
+		log.Printf("[ui] 保存位置失败: %v", err)
+	}
 }

@@ -1,10 +1,14 @@
 //go:build windows
 
-// popup.go —— 弹出菜单：绘制 + 窗口行为（显示/隐藏/命中测试/选区锚点）。
+// popup.go —— 弹出菜单：绘制 + 窗口行为（显示/隐藏/命中测试/选区锚点）+ 菜单内容。
 
 package main
 
-import "log"
+import (
+	"log"
+	"net/url"
+	"unsafe"
+)
 
 func renderMenu() {
 	th := loadTheme()
@@ -226,3 +230,44 @@ func hitTest(hwnd uintptr, screenPt point) uintptr {
 // wndProc 的返回值是 LRESULT(uintptr)，而「负数常量转 uintptr」在 Go 里是编译错误，
 // 所以这里直接返回全 1。
 func htTransparentResult() uintptr { return ^uintptr(0) }
+
+const (
+	iconCopy = iota + 1
+	iconSearch
+	iconTranslate
+	iconClose
+)
+
+type menuItem struct {
+	title    string
+	shortcut string
+	icon     int
+	run      func()
+}
+
+type menuModel struct {
+	items []menuItem
+}
+
+func selectionMenu(text string) menuModel {
+	q := url.QueryEscape(text)
+	return menuModel{items: []menuItem{
+		{title: "复制", shortcut: "Ctrl+C", icon: iconCopy, run: func() {
+			if err := setClipboardText(text); err != nil {
+				log.Printf("[action] 复制失败: %v", err)
+			}
+		}},
+		{title: "搜索", shortcut: "Enter", icon: iconSearch, run: func() {
+			shellOpen("https://www.bing.com/search?q=" + q)
+		}},
+		{title: "翻译", shortcut: "Ctrl+T", icon: iconTranslate, run: func() {
+			shellOpen("https://dict.youdao.com/result?word=" + q + "&lang=en")
+		}},
+	}}
+}
+
+func shellOpen(url string) {
+	op := utf16Ptr("open")
+	pShellExecuteW.Call(0, uintptr(unsafe.Pointer(op)),
+		uintptr(unsafe.Pointer(utf16Ptr(url))), 0, 0, swShownormal)
+}

@@ -2,9 +2,10 @@
 
 // winapi.go —— Win32 的无策略薄封装：纯查询与纯转发。
 //
-// 判据是「这个函数里有没有本项目的决策」。有决策的一律归到它的消费者那边去
-// （控制台判定 → selection.go，手势阈值 → hook.go，主题 → theme.go，
-// 打开链接 → menucontent.go），这里只留机械转发。
+// 也放了两块"平台杂项"：DPI 感知/查询，以及合成输入（本项目唯一主动向外发按键的地方）。
+//
+// 判据是「这个函数里有没有本项目的决策」。有决策的一律归它的消费者那边
+// （控制台判定 → selection.go，手势阈值 → hook.go，业务动作 → popup.go）。
 
 package main
 
@@ -208,4 +209,75 @@ func messageBoxOwned(owner uintptr, title, text string, flags uintptr) {
 func loadCursor(id uintptr) uintptr {
 	h, _, _ := pLoadCursorW.Call(0, id)
 	return h
+}
+
+// SetProcessDpiAwarenessContext 等三个 API 逐级降级。
+//
+// 这一步必须在创建任何窗口之前做，否则进程是 DPI-unaware 的：
+// 系统会把我们拿到的坐标「虚拟化」缩放，多显示器不同缩放时弹窗就会飘。
+// 注意本程序没有嵌 manifest，所以只能靠运行时调用来设置。
+func setDPIAwareness() string {
+	if r, _, _ := pSetProcessDpiAwarenessContext.Call(dpiAwarenessContextPerMonitorAwareV2); r != 0 {
+		return "PerMonitorV2"
+	}
+	// HRESULT 要按**有符号**判成功：S_OK=0、S_FALSE=1 都属于成功，
+	// 只有负值才是失败。写成 == 0 会把 S_FALSE 当成失败。
+	if r, _, _ := pSetProcessDpiAwareness.Call(processPerMonitorDpiAware); int32(r) >= 0 {
+		return "PerMonitor (shcore)"
+	}
+	if r, _, _ := pSetProcessDPIAware.Call(); r != 0 {
+		return "System (fallback)"
+	}
+	return "unaware"
+}
+
+// dpiForPoint 返回该点所在显示器的有效 DPI（96 = 100%）。
+func dpiForPoint(pt point) int32 {
+	mon := monitorFromPoint(pt)
+	if mon == 0 {
+		return 96
+	}
+	var x, y uint32
+	hr, _, _ := pGetDpiForMonitor.Call(mon, mdtEffectiveDPI,
+		uintptr(unsafe.Pointer(&x)), uintptr(unsafe.Pointer(&y)))
+	if hr != 0 || x == 0 {
+		return 96
+	}
+	return int32(x)
+}
+
+// isKeyDown 查询按键当前是否按下。
+func isKeyDown(vk uintptr) bool {
+	v, _, _ := pGetAsyncKeyState.Call(vk)
+	return int16(uint16(v)) < 0
+}
+
+func sendKey(vk uint16, up bool) {
+	flags := uint32(0)
+	if up {
+		flags = keyeventfKeyUp
+	}
+	in := input{Type: 1 /*INPUT_KEYBOARD*/, Ki: keybdInput{WVk: vk, DwFlags: flags}}
+	pSendInput.Call(1, uintptr(unsafe.Pointer(&in)), unsafe.Sizeof(in))
+}
+
+// sendCtrlC 模拟一次 Ctrl+C。
+//
+// 关键点：用户在划词时很可能正按着 Shift（或者别的方式），
+// 这里额外补发一次 Ctrl 抬起，避免修饰键状态被我们搞乱。
+func sendCtrlC() {
+	// 关键：只有**我们自己按下**的 Ctrl 才由我们抬起。
+	//
+	// 用户很可能正按着 Ctrl 在别处操作；无条件补一次「抬起」会把他的 Ctrl
+	// 松开（修饰键状态错乱）。之前的条件只挡住了「按下」，没挡住「抬起」。
+	wePressedCtrl := false
+	if !isKeyDown(vkControl) {
+		sendKey(vkControl, false)
+		wePressedCtrl = true
+	}
+	sendKey(vkC, false)
+	sendKey(vkC, true)
+	if wePressedCtrl {
+		sendKey(vkControl, true)
+	}
 }

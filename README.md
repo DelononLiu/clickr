@@ -12,24 +12,18 @@ Windows 划词助手的最小实现：**划词 → 取到选中文字 → 在选
 
 ```
 win32.go        DLL/proc 绑定 + 全部常量
-abi.go          Win32 结构体（必须逐字节对齐 SDK；审它的方式是拿头文件对）
-winapi.go       Win32 无策略薄封装（纯查询/转发）
-dpi.go          DPI 感知与查询（顺序敏感：必须在建窗口之前设置）
-input.go        合成输入（本项目唯一主动向外发按键的地方）
+abi.go          Win32 结构体（审它的方式是拿 SDK 头文件逐字节对，不是读逻辑）
+winapi.go       无策略薄封装 + 平台杂项（DPI / 合成输入）
 render.go       分层窗口软件渲染（距离场圆角/阴影、GDI 文字遮罩）
 selection.go    取文抽象：selection / textSource / pipeline / 错误分类 / 控制台判定
 capture.go      剪贴板取文（逐格式快照）+ 常驻采集线程
 uia.go          UIA TextPattern（精确选区 + 选区矩形）
 msaa.go         MSAA 取词（COM 基础设施 + IAccessible vtable）
 hook.go         全局手势识别
-state.go        共享可变状态（设计债 #1 的靶子）
-windows.go      窗口类注册与创建
-theme.go        配色
-layout.go       几何 / 尺寸 / 定位 / DPI 缩放
-menucontent.go  菜单里有哪些动作、各自的 URL（业务政策）
-popup.go        弹出菜单：绘制 + 窗口行为
-ball.go         悬浮球：绘制与位置
-ballpos.go      悬浮球位置持久化（文件 IO）
+ui.go           UI 线程骨架：共享状态 + 窗口注册与创建
+appearance.go   视觉规格：配色 + 几何（尺寸/间距/定位/DPI 缩放）
+popup.go        弹出菜单：绘制 + 窗口行为 + 菜单内容
+ball.go         悬浮球：绘制 + 位置 + 位置持久化
 wndproc.go      窗口过程 + 鼠标交互 + 跨线程投递的唯一出口
 main.go         装配、消息循环、自检/导出/探针
 *_test.go       按领域拆分的测试（跑在真 Windows 上）
