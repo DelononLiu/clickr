@@ -184,3 +184,27 @@ func getDoubleClickTime() uint32 {
 
 // sleepMS 只是为了让 capture 那边的意图更清楚。
 func sleepMS(ms int) { time.Sleep(time.Duration(ms) * time.Millisecond) }
+
+// isOwnWindow 判断某个屏幕坐标下的窗口是不是本进程的窗口。
+// 用来避免「点自己的菜单/悬浮球」又被当成一次划词。
+func isOwnWindow(pt point) bool {
+	hwnd := windowFromPoint(pt)
+	if hwnd == 0 {
+		return false
+	}
+	var pid uint32
+	pGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+	return pid == currentProcessID()
+}
+
+// dragThreshold 返回「算拖选而不算单击」的位移阈值。
+//
+// 用系统的 SM_CXDRAG / SM_CYDRAG，而不是写死 5px：
+// 这两个值的语义就是「拖动判定矩形」，而且**系统已经按 DPI 缩放过**。
+// 写死的话，200% 缩放下的 5 物理像素只等效 2.5 逻辑像素，手一抖就被当成划词。
+func dragThreshold() (int32, int32) { return systemMetric(smCXDRAG), systemMetric(smCYDRAG) }
+
+// doubleClickProximity 返回双击允许的位置偏差，同样取系统值（已按 DPI 缩放）。
+func doubleClickProximity() (int32, int32) {
+	return systemMetric(smCXDOUBLECLK), systemMetric(smCYDOUBLECLK)
+}

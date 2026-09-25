@@ -271,3 +271,28 @@ func (s msaaSource) Read(_ captureContext, at point) (selection, error) {
 		HasBounds: r.hasBound,
 	}, nil
 }
+
+// foregroundIsConsole 判断当前前台窗口是不是一个真正的控制台窗口。
+//
+// 为什么要判：控制台里 Ctrl+C 是「中断」而不是「复制」。我们合成的那次 Ctrl+C
+// 会被透传给 shell，把用户正在跑的命令打断 —— 这个副作用比取不到词严重得多。
+//
+// 只能按窗口类名判。VS Code 的集成终端是 Electron 窗口（Chrome_WidgetWin_1），
+// 和它的编辑器区无法区分，所以那种情况拦不住。
+func foregroundIsConsole() bool { return isConsoleClass(foregroundWindowClass()) }
+
+// consoleWindowClasses 是「真控制台」的窗口类名表。
+//
+// 提成表是为了可测：以前类名内联在 switch 里，于是唯一能写的测试只有
+// `_ = foregroundIsConsole()` —— 什么都没断言。而这个判定是**唯一会打断
+// 用户正在运行的命令**的分支，判错了代价比取不到词大得多。
+//
+// 这里刻意**不含** VS Code 的集成终端：它是 Electron 窗口（Chrome_WidgetWin_1），
+// 和编辑器区无法区分，拦不住；那种情况交给 MSAA 兜底。
+var consoleWindowClasses = map[string]bool{
+	"ConsoleWindowClass":            true, // conhost：cmd.exe / powershell.exe / WSL
+	"CASCADIA_HOSTING_WINDOW_CLASS": true, // Windows Terminal
+	"mintty":                        true, // Git Bash / MSYS2
+}
+
+func isConsoleClass(class string) bool { return consoleWindowClasses[class] }
