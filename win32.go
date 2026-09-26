@@ -61,6 +61,8 @@ var (
 	pSetTimer         = user32.NewProc("SetTimer")
 	pKillTimer        = user32.NewProc("KillTimer")
 	pTrackMouseEvent  = user32.NewProc("TrackMouseEvent")
+	pSetCapture       = user32.NewProc("SetCapture")
+	pReleaseCapture   = user32.NewProc("ReleaseCapture")
 	pLoadImageW       = user32.NewProc("LoadImageW")
 	pMessageBoxW      = user32.NewProc("MessageBoxW")
 	pDestroyIcon      = user32.NewProc("DestroyIcon")
@@ -79,6 +81,9 @@ var (
 	pGetCursorPos             = user32.NewProc("GetCursorPos")
 	pGetForegroundWindow      = user32.NewProc("GetForegroundWindow")
 	pSendMessageW             = user32.NewProc("SendMessageW")
+	pSetBkColor               = gdi32.NewProc("SetBkColor")
+	pSetWindowTextW           = user32.NewProc("SetWindowTextW")
+	pGetWindowLongW           = user32.NewProc("GetWindowLongW")
 	pSetFocus                 = user32.NewProc("SetFocus")
 	pSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
 	pGetClassNameW            = user32.NewProc("GetClassNameW")
@@ -213,9 +218,14 @@ const (
 	swpNoSize     = 0x0001
 	swpNoMove     = 0x0002
 	swpNoActivate = 0x0010
+	swpNoZOrder   = 0x0004
+
+	// 子窗口样式（设置页那三个输入框；wsChild 在上面"窗口样式"里已定义）
+	esLeft        = 0x0000
+	esAutoHScroll = 0x0080
+	esPassword    = 0x0020
 	swpShowWindow = 0x0040
 	swpHideWindow = 0x0080
-	swpNoZOrder   = 0x0004
 
 	// 消息
 	wmDestroy       = 0x0002
@@ -228,14 +238,27 @@ const (
 	wmLButtonDblClk = 0x0203
 	wmRButtonUp     = 0x0205
 	wmMouseLeave    = 0x02A3
+	wmMouseWheel    = 0x020A
+	wmCtlColorEdit  = 0x0133
+	wmSetFont       = 0x0030
 	wmDpiChanged    = 0x02E0
 	wmApp           = 0x8000
 	wmTimer         = 0x0113
 
 	// 自定义消息（hook/capture 线程 → 主线程）
-	wmShowMenu = wmApp + 1
-	wmHideMenu = wmApp + 2
-	wmQuitApp  = wmApp + 3
+	wmShowMenu        = wmApp + 1
+	wmHideMenu        = wmApp + 2
+	wmQuitApp         = wmApp + 3
+	wmCaptureChanged  = 0x0215     // 别的窗口抢走了鼠标捕获（拖动中要复位）
+	wmRefreshBall     = wmApp + 4  // 「划词弹出」开关变了：球心标记要跟着换颜色
+	wmOpenSettings    = wmApp + 5  // 打开设置页（菜单里点的，只能回主线程画窗口）
+	wmCloseSettings   = wmApp + 6  // 点了设置页外面：收起
+	wmHoverShowMenu   = wmApp + 7  // 鼠标停在悬浮球上：延时到点后自动弹菜单
+	wmHoverHideMenu   = wmApp + 8  // 鼠标离开球与菜单：延时到点后收起
+	wmOpenSidebar     = wmApp + 9  // 左键单击悬浮球：弹出右侧边栏
+	wmCloseSidebar    = wmApp + 10 // 点了侧边栏外面：收起
+	wmAIRepaint       = wmApp + 11 // 流式答案到了一段：重画侧边栏（已合并）
+	wmRepaintSettings = wmApp + 12 // 设置页底部状态变了：重画 // 流式答案到了一段：重画侧边栏（已合并）
 
 	// 命中测试
 	htTransparent = -1
@@ -286,6 +309,7 @@ const (
 	defaultCharset     = 1
 	fwNormal           = 400
 	fwMedium           = 500
+	fwSemiBold         = 600
 
 	// 图层混合
 	ulwAlpha   = 0x02

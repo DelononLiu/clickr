@@ -55,6 +55,7 @@ func main() {
 	showVersion := flag.Bool("version", false, "打印构建戳后退出（用来确认部署的到底是哪个版本）")
 	probe := flag.Bool("probe", false, "只读取文诊断：对当前鼠标位置跑一遍 UIA/MSAA 并打印结果；不发 Ctrl+C")
 	probeAt := flag.String("probe-at", "", "配合 -probe 使用：指定屏幕坐标 \"x,y\"，而不是用鼠标当前位置")
+	ask := flag.String("ask", "", "对这段文字跑一次「临时问答」并把答案打到 stdout 后退出（调试用；读 %AppData%\\clickr\\ai.txt）")
 	flag.Parse()
 
 	if *showVersion {
@@ -109,6 +110,12 @@ func main() {
 	}
 	scale = float64(dpiForPoint(dpiProbe)) / 96.0
 
+	// 「划词自动弹菜单」开关：默认开，用户关过就一直关着（见 config.go）
+	setSelectionPopup(loadPopupEnabled())
+	_ = enabledSkillIDsCached() // 顺带把技能列表读进缓存
+	ensureAIConfigTemplate()    // 预置好临时问答的接口配置（DeepSeek，待填 key）
+	log.Printf("[init] 划词自动弹菜单: %s", onOff(selectionPopupEnabled()))
+
 	initial := defaultBallPos()
 	if hasSaved {
 		initial = saved
@@ -120,6 +127,11 @@ func main() {
 		ballWindowSize(), ballWindowSize(), initial.X, initial.Y, scale,
 		workArea(initial).Left, workArea(initial).Top,
 		workArea(initial).Right, workArea(initial).Bottom)
+
+	if *ask != "" {
+		runAsk(*ask)
+		return
+	}
 
 	if *probe {
 		runProbe(*probeAt)
@@ -142,14 +154,15 @@ func main() {
 		log.Printf("[capture] 取到 %d 字（来源=%s 程序=%q 耗时 %v）: %.40q",
 			len([]rune(res.text)), res.method, res.foregroundClass,
 			res.elapsed.Round(1e6), res.text)
-		// UIA 能给出选区矩形时就用选区末尾当锚点，比鼠标抬起点准。
-		// 剪贴板法没有矩形，退回鼠标点。
-		anchor := res.anchor
+		// 锚点就是**鼠标那一下的位置**，菜单贴在它正下方一行（见 placeMenu）。
+		//
+		// 曾经改成过"选区矩形的右下角"（理由是反向拖选时比鼠标点准），现在改回来了：
+		// 菜单是跟着这次鼠标动作出来的，出现在鼠标底下才符合"我刚在这儿操作"的预期。
+		// 选区矩形仍然记进日志 —— 排查"菜单弹歪了"时它是第一手证据。
 		if res.hasBounds {
-			anchor = point{res.bounds.Right, res.bounds.Bottom}
-			log.Printf("[capture] 使用选区矩形 %v 作为锚点", res.bounds)
+			log.Printf("[capture] 选区矩形 %v（只记日志，不再当锚点）", res.bounds)
 		}
-		queueMenu(anchor, selectionMenu(res.text))
+		queueMenu(res.anchor, selectionMenu(res.text))
 	})
 	// 必须在装有消费者之后才装钩子：captureCh 是无缓冲的，
 	// 采集 worker 若还没阻塞在接收上，第一个请求会被当成「忙」而丢弃。
@@ -159,6 +172,13 @@ func main() {
 	// ---- 6) 装全局鼠标钩子 ----
 	err := startMouseHook(
 		func(anchor point, how string) {
+			// 功能关掉了就**连取词都不做**：取词要发 Ctrl+C、要动剪贴板，
+			// 功能关了还去动用户的剪贴板说不过去。
+			if !selectionPopupEnabled() {
+				log.Printf("[hook] 识别到划词动作 %s @(%d,%d)，但「划词自动弹菜单」已关闭，"+
+					"忽略本次（单击悬浮球 → 启用）", how, anchor.X, anchor.Y)
+				return
+			}
 			log.Printf("[hook] 识别到划词动作: %s @(%d,%d)", how, anchor.X, anchor.Y)
 			req := captureRequest{anchor: anchor, how: how}
 			go func() {
@@ -172,7 +192,7 @@ func main() {
 	if err != nil {
 		fatal("安装全局鼠标钩子失败: %v\n\n可能是被安全软件拦截。", err)
 	}
-	log.Printf("[init] 就绪：划词后会自动弹出菜单；右键悬浮球退出")
+	log.Printf("[init] 就绪：划词后自动弹出工具栏；悬停悬浮球出菜单；单击悬浮球出右侧边栏")
 
 	// ---- 7) 消息循环 ----
 	var m msg
@@ -208,6 +228,60 @@ func main() {
 //
 //	clickr-debug.exe -probe              # 用当前鼠标位置（裸写，不带值）
 //	clickr-debug.exe -probe -probe-at=800,400   # 指定屏幕坐标（物理像素）
+//
+// onOff 把布尔值打成日志里好认的两个字。日志要能直接读，不要打 true/false。
+func onOff(v bool) string {
+	if v {
+		return "开"
+	}
+	return "关"
+}
+
+// runAsk 跑一次「临时问答」并把答案打到 stdout。
+//
+// 存在的意义和 -dump 一样：**让"只能靠点界面"的东西也能被验证**。
+// 没有它，接口这条路只能在真界面上手点，出了问题（401、模型名不对、
+// SSE 格式不兼容）就只能猜。它用的是同一段 aiAsk，不是另写一份。
+//
+//	（配置与界面共用一份：%AppData%\clickr\ai.txt）
+//	clickr-debug.exe -ask "天空为什么是蓝的"
+//	clickr-debug.exe -ask "天空为什么是蓝的"
+func runAsk(question string) {
+	log.Printf("[ask] 配置：%s", describeAIStatus())
+	log.Printf("[ask] 问题：%s", question)
+
+	done := make(chan struct{})
+	go func() {
+		aiAsk(question)
+		close(done)
+	}()
+
+	// 轮询状态并实时打印增量（aiAsk 是流式的，界面也是这么画的）
+	shown := 0
+	for {
+		select {
+		case <-done:
+			st := aiNow()
+			if rest := st.Answer[shown:]; rest != "" {
+				fmt.Print(rest)
+			}
+			fmt.Println()
+			if st.Err != "" {
+				fmt.Fprintf(os.Stderr, "[ask] 失败：%s\n", st.Err)
+				os.Exit(1)
+			}
+			fmt.Printf("[ask] 完成，共 %d 字\n", len([]rune(st.Answer)))
+			return
+		case <-time.After(50 * time.Millisecond):
+			st := aiNow()
+			if len(st.Answer) > shown {
+				fmt.Print(st.Answer[shown:])
+				shown = len(st.Answer)
+			}
+		}
+	}
+}
+
 func runProbe(arg string) {
 	pt, err := parseProbePoint(arg)
 	if err != nil {
@@ -283,13 +357,23 @@ func runDump(prefix string) {
 	renderBall()
 	writeDump(prefix+"_ball.clkr", ballSurf)
 
-	// 用真实的三项菜单来导出，包含 hover 态（第 0 项）。
+	// 用真实的菜单来导出，包含 hover 态（第 0 项）与展开的「…」二级面板。
+	// 导出的是**展开态**：收起态就是少画下面那块，看到的更多。
 	// 这里不需要锁：runDump 在启动期跑，此时钩子/采集线程都还没起。
+	// 设置页与侧边栏也各导一份：它们跟菜单一样是"只能靠看"的东西。
+	renderSettings()
+	writeDump(prefix+"_settings.clkr", settingsSurf)
+	// 侧边栏有"当前选中"那块卡片，给个示例文字才看得出它长什么样
+	setLastSelection("这是一段被选中的示例文字，用来验证侧边栏渲染是否正确。")
+	renderSidebar()
+	writeDump(prefix+"_sidebar.clkr", sidebarSurf)
+
 	menuModel_ = selectionMenu("这是一段被选中的示例文字，用来验证菜单渲染是否正确。")
 	menuHover = 0
-	n := len(menuModel_.items)
+	menuExpanded = true
+	menuPanelHover = 0
 
-	w, h := menuWindowSize(n)
+	w, h := menuWindowSize(menuModel_)
 	menuSurf = newSurface(w, h)
 	renderMenu()
 	writeDump(prefix+"_menu.clkr", menuSurf)
@@ -304,7 +388,10 @@ func writeDump(path string, s *surface) {
 		return
 	}
 	buf := make([]byte, 0, 16+len(s.bits))
-	buf = append(buf, 'N', 'K', 'B', '1')
+	// 魔数必须跟上面注释、以及 docs/architecture.md 的「改名完整性」清单一致。
+	// 改名那次漏的就是这里：注释写着 CLKR，实际写的还是旧项目名的 NKB1，
+	// 而清单又是照注释核的 —— 两边一起错，谁也没发现。这次实测导出文件才撞出来。
+	buf = append(buf, 'C', 'L', 'K', 'R')
 	buf = appendLE32(buf, uint32(s.w))
 	buf = appendLE32(buf, uint32(s.h))
 	buf = append(buf, s.bits...)
@@ -326,6 +413,12 @@ func runSelfTest() {
 	// 从悬浮球旁边弹出来，方便一起看
 	anchor := point{ballPos.X + ballWindowSize(), ballPos.Y + ballWindowSize()/2}
 	showMenu(anchor, sample)
+
+	// 自检要一眼看全：把「…」面板也展开（不然只能看到工具条那一行）
+	menuExpanded = true
+	updateMenuScreenRect()
+	renderMenu()
+	menuSurf.present(hwndMenu, menuPos.X, menuPos.Y)
 
 	// 诊断：窗口到底有没有真的显示出来
 	for _, w := range []struct {

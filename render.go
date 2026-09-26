@@ -4,7 +4,7 @@
 //
 // 为什么要自己画：
 //   - 想要「圆角 + 柔和阴影」，普通窗口做不到，得用逐像素 alpha 的分层窗口；
-//   - 有道的菜单是 border-radius:16px + box-shadow: 0 5px 10px rgba(139,146,160,.14)，
+//   - 设计稿写的是 border-radius:16px + box-shadow（豆包的 token，见 appearance.go），
 //     这里用「圆角矩形的有符号距离场 + 高斯衰减」把同样的观感还原出来。
 //
 // 一个关键坑：GDI 往 32bpp DIB 上画东西时，alpha 字节不会被写入（一直是 0）。
@@ -323,14 +323,36 @@ func (s *surface) fillLine(x1, y1, x2, y2, thickness float64, c rgba) {
 
 var (
 	fontMu    sync.Mutex
-	fontCache = map[[2]int32]uintptr{}
+	fontCache = map[fontKey]uintptr{}
 )
 
-// font 取一个按像素高度指定的字体句柄（带缓存）。
+// 本项目的 UI 字体，以及画 emoji 图标用的字体。
+const (
+	uiFontFace    = "Microsoft YaHei UI"
+	emojiFontFace = "Segoe UI Emoji"
+)
+
+type fontKey struct {
+	face   string
+	size   int32
+	weight int32
+}
+
+// font 取 UI 字体的句柄（按像素高度指定，带缓存）。
+func font(sizePx, weight int32) uintptr { return fontFace(uiFontFace, sizePx, weight) }
+
+// emojiFont 取 emoji 字体的句柄。
+//
+// 用 GDI 画 emoji 拿到的是**单色轮廓**（GDI 不支持 COLR/CPAL 彩色字形），
+// 这正好合我们的用法：文字遮罩那套就是"亮度当覆盖率"，彩色反而会算错。
+func emojiFont(sizePx int32) uintptr { return fontFace(emojiFontFace, sizePx, fwNormal) }
+
+// fontFace 取一个按「字体名 + 像素高度」指定的字体句柄（带缓存）。
+//
 // 用 ANTIALIASED_QUALITY（灰度抗锯齿）而不是 ClearType：
 // ClearType 会产生彩色子像素，破坏「用亮度当覆盖率」的取字方案。
-func font(sizePx, weight int32) uintptr {
-	key := [2]int32{sizePx, weight}
+func fontFace(face string, sizePx, weight int32) uintptr {
+	key := fontKey{face: face, size: sizePx, weight: weight}
 	fontMu.Lock()
 	defer fontMu.Unlock()
 	if h, ok := fontCache[key]; ok {
@@ -342,7 +364,7 @@ func font(sizePx, weight int32) uintptr {
 		LfCharSet: defaultCharset,
 		LfQuality: antialiasedQuality,
 	}
-	name, _ := syscall.UTF16FromString("Microsoft YaHei UI")
+	name, _ := syscall.UTF16FromString(face)
 	copy(lf.LfFaceName[:], name)
 	h, _, _ := pCreateFontIndirectW.Call(uintptr(unsafe.Pointer(&lf)))
 	fontCache[key] = h
@@ -450,6 +472,18 @@ func textWidth(text string, hf uintptr) int32 {
 
 // present 把表面的内容推到分层窗口上（同时决定窗口的位置和大小），并确保窗口可见。
 func (s *surface) present(hwnd uintptr, x, y int32) {
+	s.presentEx(hwnd, x, y, false)
+}
+
+// presentActivating 和 present 一样，但**允许窗口被激活**（并主动前置）。
+//
+// 只有设置页用：里面有原生输入框，得能拿到键盘焦点。
+// 其它窗口必须保持 SWP_NOACTIVATE —— 一抢焦点，源程序的选区就没了（D8）。
+func (s *surface) presentActivating(hwnd uintptr, x, y int32) {
+	s.presentEx(hwnd, x, y, true)
+}
+
+func (s *surface) presentEx(hwnd uintptr, x, y int32, activate bool) {
 	screen, _, _ := pGetDC.Call(0)
 	defer pReleaseDC.Call(0, screen)
 
@@ -485,10 +519,17 @@ func (s *surface) present(hwnd uintptr, x, y int32) {
 	// 用 SetWindowPos + SWP_SHOWWINDOW 而不是 ShowWindow(SW_SHOW)：
 	// 只有前者能同时带上 SWP_NOACTIVATE，保证不抢焦点 ——
 	// 一旦抢了焦点，源程序的选区高亮会消失，弹窗就白弹了。
+	flags := uintptr(swpNoMove | swpNoSize | swpNoActivate | swpShowWindow)
+	if activate {
+		flags = uintptr(swpNoMove | swpNoSize | swpShowWindow)
+	}
 	pSetWindowPos.Call(hwnd,
 		^uintptr(0), // HWND_TOPMOST
 		0, 0, 0, 0,
-		uintptr(swpNoMove|swpNoSize|swpNoActivate|swpShowWindow))
+		flags)
+	if activate {
+		pSetForegroundWindow.Call(hwnd)
+	}
 }
 
 // itoa 避免为了拼缓存 key 引入 strconv。
